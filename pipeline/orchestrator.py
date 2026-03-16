@@ -43,7 +43,7 @@ class Pipeline:
         
         Args:
             initial_query: The research query to start with
-            initial_context: Optional initial context
+            initial_context: Optional initial context (can include 'parameters' dict)
             
         Returns:
             Final AgentOutput from the last agent in the pipeline
@@ -51,18 +51,25 @@ class Pipeline:
         if not self.agents:
             raise ValueError("Pipeline has no agents. Add agents before executing.")
         
-        context = initial_context or {}
+        context = initial_context.copy() if initial_context else {}
         current_query = initial_query
+        
+        # Extract parameters from context if present
+        initial_params = context.pop("parameters", {})
         
         logger.info(f"Starting pipeline with query: {initial_query}")
         
         for i, agent in enumerate(self.agents):
             logger.info(f"Executing agent {i+1}/{len(self.agents)}: {agent.name}")
             
+            # Merge initial parameters with agent-specific config
+            agent_config_params = self.config.get("agents", {}).get(agent.name, {}).get("parameters", {})
+            params = {**initial_params, **agent_config_params}
+            
             input_data = AgentInput(
                 query=current_query,
                 context=context,
-                parameters=self.config.get("agents", {}).get(agent.name, {}).get("parameters", {})
+                parameters=params
             )
             
             try:

@@ -2,6 +2,32 @@
 
 This file documents all agents in the marketing swarm. Each agent is responsible for a specific research task and passes results to the next agent in the pipeline.
 
+## Input Parameters
+
+The pipeline accepts these inputs:
+- **Industry**: FinTech, Payments, Artificial Intelligence, Technology, etc.
+- **Region**: USA, Europe, APAC, Middle East, Asia, global
+- **Theme**: Specific topic (digital payments, blockchain, machine learning, etc.)
+
+## Filtering Rules
+
+The Event Discovery Agent applies strict filters:
+
+| Rule | Description | Example |
+|------|-------------|---------|
+| **Exclude Vendor Events** | No company-specific product launches | Excludes: Google I/O, AWS re:Invent, Microsoft Build |
+| **Industry-wide Only** | Public events with multiple participants | Includes: MAG Payments, MRC, Money20/20 |
+| **Date Verification** | Verified dates only | Excludes events with uncertain dates |
+| **Consistent Rules** | Same filter across all industries | Applied uniformly |
+
+### Excluded Companies (Vendor Events)
+Google, AWS, Amazon, Microsoft, Meta, Facebook, Apple, Salesforce, Oracle, IBM, Intel, Nvidia, Adobe, Shopify, Stripe, PayPal, Square, Zoom, Slack, GitHub, GitLab, Docker, Kubernetes, Twilio, Snowflake, Databricks, Cloudflare, HubSpot, Zendesk, Intercom, LinkedIn, Twitter, etc.
+
+### Included Events (Industry-wide)
+Conference, Summit, Expo, Forum, Festival, Convention, Symposium - that are open to the broader industry.
+
+---
+
 ## JSON Schema
 
 All agents share a common JSON schema for passing data:
@@ -41,7 +67,8 @@ All agents share a common JSON schema for passing data:
       "recommendation": "",
       "outreach_subject": "",
       "outreach_email": "",
-      "status": "Researching"
+      "date_verified": false,
+      "status": "Discovered"
     }
   ]
 }
@@ -53,7 +80,7 @@ All agents share a common JSON schema for passing data:
 
 | Agent Name | Description | Status |
 |------------|--------------|--------|
-| Event Discovery Agent | Discovers industry events globally for sponsorship | ✅ Active |
+| Event Discovery Agent | Discovers industry events with smart filtering | ✅ Active |
 | Event Qualification Agent | Scores events for sponsorship potential | ✅ Active |
 | Event Website Scraper Agent | Extracts event details from websites | ✅ Active |
 | Event Intelligence Agent | Strategic analysis for sponsorship | ✅ Active |
@@ -66,11 +93,11 @@ All agents share a common JSON schema for passing data:
 ## Agent Pipeline Flow
 
 ```
-User Prompt
+User Inputs: Industry + Region + Theme
     │
     ▼
 ┌─────────────────────────────────────┐
-│   Event Discovery Agent             │ ← Finds events globally
+│   Event Discovery Agent             │ ← Applies vendor/event filters
 └─────────────────────────────────────┘
     │
     ▼
@@ -109,47 +136,57 @@ User Prompt
 ## Agent Details
 
 ### 1. Event Discovery Agent
-- **Researches**: FinTech, Payments, AI, Technology, Software Development, Open Source events
-- **Regions**: US, North America, South America, APAC, India, Singapore, Dubai, Riyadh, Middle East, Brazil
+- **Input**: Industry, Region, Theme (from CLI)
+- **Filters Applied**:
+  - Excludes company-specific events (Google, AWS, etc.)
+  - Only includes industry-wide events
+  - Verifies date accuracy
 - **Output**: Event names, websites, locations, themes
 
 ### 2. Event Qualification Agent
-- **Researches**: Event audience, reputation, attendance, sponsor value
-- **Scores**: 1-10 for each category
+- **Input**: Events from Discovery
+- **Scores**: 1-10 for audience, reputation, attendance, sponsor value, regional importance
 - **Output**: Overall score, priority tier (Tier 1-4)
 
 ### 3. Event Website Scraper Agent
-- **Researches**: Official event websites for dates, contacts, sponsorship info
-- **Output**: Start/end dates, contact info, sponsorship URL
+- **Input**: Events with websites
+- **Extracts**: Dates, contacts, sponsorship URL, about page info
+- **Output**: Detailed event information
 
 ### 4. Event Intelligence Agent
-- **Researches**: Strategic value, ROI, ideal sponsorship format
-- **Output**: Attendee roles, companies, strategic value, ROI estimate
+- **Input**: Qualified events
+- **Analysis**: Strategic value, ROI potential, sponsorship format
+- **Output**: Attendee roles, companies, strategic value
 
 ### 5. Event Prioritization Agent
-- **Researches**: Strategic relevance, timing, brand exposure
+- **Input**: Analyzed events
+- **Sorts**: By score and tier
 - **Output**: Recommendation (Reach out immediately / Research further / Monitor)
 
 ### 6. Outreach Email Agent
-- **Researches**: N/A (generates content based on event data)
-- **Output**: Subject line, email body (professional B2B format)
+- **Input**: Prioritized events
+- **Generates**: Professional B2B sponsorship emails
+- **Output**: Subject line, email body
 
 ### 7. Excel Table Generator Agent
-- **Researches**: N/A (formats output)
-- **Output**: CSV, Markdown table, Excel-ready format
+- **Input**: All event data
+- **Formats**: CSV, Markdown, Excel-ready
+- **Output**: Structured table
 
 ---
 
-## Pipeline Configuration
+## Usage Examples
 
-The pipeline is configured in `main.py`. All 7 agents run sequentially by default:
+```bash
+# Payments industry, Middle East
+python -m marketing_agents run --industry Payments --region "Middle East"
 
-```python
-pipeline.add_agent(EventDiscoveryAgent(max_events=50))
-pipeline.add_agent(EventQualificationAgent())
-pipeline.add_agent(EventWebsiteScraperAgent())
-pipeline.add_agent(EventIntelligenceAgent())
-pipeline.add_agent(EventPrioritizationAgent())
-pipeline.add_agent(OutreachEmailAgent())
-pipeline.add_agent(ExcelTableGeneratorAgent())
+# AI conferences, APAC
+python -m marketing_agents run --industry "Artificial Intelligence" --region APAC
+
+# FinTech, global
+python -m marketing_agents run --industry FinTech --region global
+
+# With specific theme
+python -m marketing_agents run --industry Payments --theme "digital payments" --region USA
 ```

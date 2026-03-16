@@ -29,7 +29,7 @@ def create_pipeline() -> Pipeline:
     """Create and configure the event research pipeline.
     
     Pipeline flow:
-    1. Event Discovery - Find events globally
+    1. Event Discovery - Find events globally (with filters)
     2. Event Qualification - Score and tier events
     3. Event Website Scraper - Extract website details
     4. Event Intelligence - Strategic analysis
@@ -55,17 +55,38 @@ def create_pipeline() -> Pipeline:
 
 
 def run_command(args):
-    """Run the pipeline with a prompt."""
+    """Run the pipeline with input parameters."""
     pipeline = create_pipeline()
     
     if not pipeline.agents:
         logger.error("No agents configured. Add agents before running.")
         sys.exit(1)
     
-    logger.info(f"Running with prompt: {args.prompt}")
+    # Build parameters from arguments
+    params = {}
+    
+    if args.industry:
+        params["industry"] = args.industry
+        logger.info(f"Industry: {args.industry}")
+    
+    if args.region:
+        params["region"] = args.region
+        logger.info(f"Region: {args.region}")
+    
+    if args.theme:
+        params["theme"] = args.theme
+        logger.info(f"Theme: {args.theme}")
+    
+    # Build query from inputs
+    query = args.prompt or f"{args.industry or 'Technology'} events"
+    if args.region:
+        query += f" in {args.region}"
+    
+    logger.info(f"Running with query: {query}")
     
     try:
-        result = pipeline.execute(args.prompt)
+        # Pass parameters to pipeline
+        result = pipeline.execute(query, initial_context={"parameters": params})
         
         print("\n" + "=" * 60)
         print("PIPELINE RESULT")
@@ -84,13 +105,13 @@ def run_command(args):
             print("\n" + "-" * 60)
             print("EVENT SUMMARY")
             print("-" * 60)
-            print(f"{'Event Name':<40} {'Score':<8} {'Tier':<25}")
+            print(f"{'Event Name':<45} {'Score':<8} {'Tier':<25}")
             print("-" * 60)
             for event in events[:10]:  # Show top 10
-                name = event.get("event_name", "N/A")[:38]
+                name = event.get("event_name", "N/A")[:43]
                 score = event.get("overall_score", "N/A")
                 tier = event.get("priority_tier", "N/A")[:23]
-                print(f"{name:<40} {score:<8} {tier:<25}")
+                print(f"{name:<45} {score:<8} {tier:<25}")
             
             if len(events) > 10:
                 print(f"... and {len(events) - 10} more events")
@@ -103,7 +124,7 @@ def run_command(args):
             print(findings["csv"])
         
         # Save full results to file
-        output_file = "event_pipeline_results.json"
+        output_file = args.output or "event_pipeline_results.json"
         with open(output_file, "w") as f:
             json.dump(findings, f, indent=2)
         print(f"\nFull results saved to: {output_file}")
@@ -135,7 +156,22 @@ def list_agents_command(args):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Marketing Agents Swarm - Event Research Pipeline"
+        description="Marketing Agents Swarm - Event Research Pipeline",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Find Payments events in Middle East
+  python -m marketing_agents run --industry Payments --region "Middle East"
+  
+  # Find AI conferences in APAC
+  python -m marketing_agents run --industry "Artificial Intelligence" --region APAC
+  
+  # Find FinTech events globally
+  python -m marketing_agents run --industry FinTech --region global
+  
+  # With custom theme
+  python -m marketing_agents run --industry Payments --theme "digital payments" --region USA
+        """
     )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
     
@@ -143,8 +179,25 @@ def main():
     run_parser = subparsers.add_parser("run", help="Run the event research pipeline")
     run_parser.add_argument(
         "--prompt", "-p",
+        help="The research prompt/query (optional if industry is specified)"
+    )
+    run_parser.add_argument(
+        "--industry", "-i",
         required=True,
-        help="The research prompt/query (e.g., 'Find FinTech conferences 2025')"
+        help="Industry focus (e.g., FinTech, Payments, Artificial Intelligence, Technology)"
+    )
+    run_parser.add_argument(
+        "--region", "-r",
+        help="Region (e.g., USA, Europe, APAC, Middle East, Asia, global)"
+    )
+    run_parser.add_argument(
+        "--theme", "-t",
+        help="Theme or topic (e.g., digital payments, machine learning, blockchain)"
+    )
+    run_parser.add_argument(
+        "--output", "-o",
+        default="event_pipeline_results.json",
+        help="Output file name (default: event_pipeline_results.json)"
     )
     run_parser.set_defaults(func=run_command)
     

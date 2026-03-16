@@ -6,6 +6,13 @@ A flexible swarm of research-focused marketing agents with sequential pipeline e
 
 This project provides an **event research pipeline system** for discovering, qualifying, and generating outreach for industry events. Perfect for event sponsorship research.
 
+## Key Features
+
+- **Input-based discovery**: Start with industry, region, and theme
+- **Smart filtering**: Excludes vendor-specific events (Google I/O, AWS re:Invent, etc.)
+- **Industry-wide only**: Focuses on public, ecosystem-level events
+- **Date verification**: Ensures event dates are accurate and current
+
 ## Quick Start
 
 ```bash
@@ -15,43 +22,49 @@ pip install -e .
 
 # Set up environment variables
 cp .env.example .env
-# Edit .env with your API keys (OpenAI, Tavily, etc.)
 
-# Run the event research pipeline
-python -m marketing_agents run --prompt "Find FinTech conferences 2025"
+# Run with industry and region
+python -m marketing_agents run --industry Payments --region "Middle East"
 ```
 
-## Architecture
+## Usage
 
+```bash
+# Find Payments events in Middle East
+python -m marketing_agents run --industry Payments --region "Middle East"
+
+# Find AI conferences in APAC
+python -m marketing_agents run --industry "Artificial Intelligence" --region APAC
+
+# Find FinTech events globally
+python -m marketing_agents run --industry FinTech --region global
+
+# With custom theme
+python -m marketing_agents run --industry Payments --theme "digital payments" --region USA
+
+# Custom output file
+python -m marketing_agents run --industry FinTech --output my_events.json
+
+# List available agents
+python -m marketing_agents list-agents
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      User Prompt                             │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Pipeline Orchestrator                     │
-└─────────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────┬─────────┬─────────┬─────────┬─────────┐
-        ▼         ▼         ▼         ▼         ▼         ▼
-   ┌────────┐┌────────┐┌────────┐┌────────┐┌────────┐┌────────┐
-   │Discover││Qualify ││ Scrape ││Intelli-││Priorit-││Outreach│
-   │ Events ││ Events ││Website ││  gence ││  ize   ││ Email  │
-   └────────┘└────────┘└────────┘└────────┘└────────┘└────────┘
-                                                                  │
-                                                                  ▼
-                                                           ┌────────┐
-                                                           │ Excel  │
-                                                           │Output  │
-                                                           └────────┘
-```
+
+## Filtering Rules Applied
+
+The pipeline automatically applies these filters:
+
+| Rule | Description |
+|------|-------------|
+| **Exclude Vendor Events** | Filters out company-specific product launches (Google I/O, AWS re:Invent, etc.) |
+| **Industry-wide Only** | Only includes public events with multiple companies/participants |
+| **Date Verification** | Marks events with verified dates; excludes uncertain dates |
+| **Consistent Filtering** | Same rules applied across all industries |
 
 ## Agent Pipeline
 
 | # | Agent | Purpose |
 |---|-------|---------|
-| 1 | Event Discovery | Find events globally (FinTech, AI, Payments, etc.) |
+| 1 | Event Discovery | Find events (with vendor/industry filters) |
 | 2 | Event Qualification | Score & tier events (1-10 scale) |
 | 3 | Event Website Scraper | Extract details from event websites |
 | 4 | Event Intelligence | Strategic analysis & ROI potential |
@@ -59,26 +72,14 @@ python -m marketing_agents run --prompt "Find FinTech conferences 2025"
 | 6 | Outreach Email | Generate professional sponsorship emails |
 | 7 | Excel Table Generator | Output CSV/Excel-ready format |
 
-## JSON Schema
+## Input Parameters
 
-All agents share a common JSON schema for reliable data passing:
-
-```json
-{
-  "events": [
-    {
-      "event_name": "...",
-      "event_website": "...",
-      "city": "...",
-      "country": "...",
-      "overall_score": "...",
-      "priority_tier": "...",
-      "outreach_email": "...",
-      ...
-    }
-  ]
-}
-```
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `--industry` | Yes | Industry (FinTech, Payments, AI, Technology, etc.) |
+| `--region` | No | Region (USA, Europe, APAC, Middle East, Asia, global) |
+| `--theme` | No | Specific theme (digital payments, blockchain, etc.) |
+| `--output` | No | Output file (default: event_pipeline_results.json) |
 
 ## Project Structure
 
@@ -86,7 +87,7 @@ All agents share a common JSON schema for reliable data passing:
 marketing_agents/
 ├── agents/
 │   ├── base.py                    # Base agent class
-│   ├── event_discovery.py        # Agent 1: Find events
+│   ├── event_discovery.py        # Agent 1: Find events (with filters)
 │   ├── event_qualification.py     # Agent 2: Score events
 │   ├── event_website_scraper.py   # Agent 3: Extract details
 │   ├── event_intelligence.py      # Agent 4: Strategic analysis
@@ -103,41 +104,14 @@ marketing_agents/
 ├── main.py                        # CLI entry point
 └── docs/
     ├── agents.md                  # Agent registry
-    ├── configuration.md          # API keys setup
+    ├── configuration.md           # API keys setup
     ├── pipeline.md               # How it works
     └── custom-agents.md          # Creating new agents
-```
-
-## Documentation
-
-- [Agents Registry](docs/agents.md) — List of all available agents
-- [Configuration Guide](docs/configuration.md) — Setting up API keys
-- [Pipeline Design](docs/pipeline.md) — Sequential execution explained
-- [Writing Custom Agents](docs/custom-agents.md) — Extending the system
-
-## Configuration
-
-Set up your `.env` file:
-
-```bash
-OPENAI_API_KEY=your_openai_key
-TAVILY_API_KEY=your_tavily_key
-SERPER_API_KEY=your_serper_key
-```
-
-## Running the Pipeline
-
-```bash
-# Basic usage
-python -m marketing_agents run --prompt "Find AI conferences 2025"
-
-# List available agents
-python -m marketing_agents list-agents
 ```
 
 ## Output
 
 The pipeline generates:
-- **JSON file**: `event_pipeline_results.json` - Full results
+- **JSON file**: Full results with all event data
 - **CSV output**: For Excel/Google Sheets import
-- **Console summary**: Top events with scores
+- **Console summary**: Top events with scores and tiers
