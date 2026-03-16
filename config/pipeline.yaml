@@ -1,0 +1,14 @@
+# Pipeline Configuration
+# Defines which agents are enabled and their execution order
+
+pipeline:
+  name: "marketing-research-pipeline"
+  description: "Sequential research agent pipeline"
+  
+  agents:
+    # Add your agents here with their configuration
+    # Example:
+    # - agent_name: "competitor_scout"
+    #   enabled: true
+    #   parameters:
+    #     max_results: 10
