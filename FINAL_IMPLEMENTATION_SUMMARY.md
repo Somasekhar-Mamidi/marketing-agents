@@ -98,7 +98,7 @@ For intent_understanding, **claude-sonnet-4-5** offers best value (95% of opus q
 ### To Run Full Matrix
 ```bash
 cd "/Users/somasekhar.mamidi/Desktop/Marketing Agents/marketing_agents"
-export GRID_AI_API_KEY="sk-3TH9s3nAxrtBzXdj6HwMww"
+export GRID_AI_API_KEY="your-api-key-here"
 python3 scripts/run_comprehensive_matrix.py
 ```
 
@@ -304,7 +304,7 @@ curl /experiments/abc123/comparison
 
 ### Test API Connection
 ```bash
-export GRID_AI_API_KEY="sk-3TH9s3nAxrtBzXdj6HwMww"
+export GRID_AI_API_KEY="your-api-key-here"
 python3 -c "from utils.configurable_llm_client import get_llm_client; \
   client = get_llm_client(); \
   print(client.get_agent_model_info('intent_understanding'))"

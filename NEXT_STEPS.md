@@ -30,7 +30,7 @@
 
 ```bash
 # 1. Set API key
-export GRID_AI_API_KEY="sk-3TH9s3nAxrtBzXdj6HwMww"
+export GRID_AI_API_KEY="your-api-key-here"
 
 # 2. Start backend
 python3 api/main.py
@@ -53,7 +53,7 @@ curl http://localhost:8000/pipeline/start \
 
 ```bash
 # Test all agents with GLM models (no cap)
-export GRID_AI_API_KEY="sk-3TH9s3nAxrtBzXdj6HwMww"
+export GRID_AI_API_KEY="your-api-key-here"
 
 # Run comprehensive matrix (skip Claude/Gemini or minimal tests)
 python3 scripts/run_comprehensive_matrix.py \
