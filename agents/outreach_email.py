@@ -2,35 +2,24 @@
 
 import logging
 from agents.base import BaseAgent, AgentInput, AgentOutput
+from config.company_config import get_company_config
 
 logger = logging.getLogger(__name__)
 
 
 class OutreachEmailAgent(BaseAgent):
-    """Generates professional B2B outreach emails for event sponsorship.
-    
-    For each event, generates:
-    - outreach_subject: Professional subject line
-    - outreach_email: Concise email body (under 120 words)
-    
-    Email goals:
-    - Introduce the company
-    - Express interest in sponsoring
-    - Request sponsorship details
-    - Ask for a quick call
-    """
+    """Generates professional B2B outreach emails for event sponsorship."""
     
     name = "outreach_email"
     description = "Generates sponsorship outreach emails"
     
-    # Company name template (can be customized)
-    COMPANY_NAME = "[Your Company Name]"
+    def __init__(self):
+        self.config = get_company_config()
     
     def execute(self, input_data: AgentInput) -> AgentOutput:
         """Generate outreach emails for all events."""
         self.validate_input(input_data)
         
-        # Get events from context
         events = input_data.context.get("events", [])
         
         if not events:
@@ -42,12 +31,10 @@ class OutreachEmailAgent(BaseAgent):
         
         logger.info(f"Generating outreach emails for {len(events)} events")
         
-        # Filter to only high-priority events
         outreach_events = []
         for event in events:
             recommendation = event.get("recommendation", "")
             
-            # Only generate emails for events we're reaching out to
             if "Reach out" in recommendation or "Research further" in recommendation:
                 email_event = self._generate_outreach(event)
                 outreach_events.append(email_event)
@@ -67,10 +54,7 @@ class OutreachEmailAgent(BaseAgent):
         theme = event.get("theme", "technology")
         tier = event.get("priority_tier", "")
         
-        # Generate subject line
         subject = self._generate_subject(event_name, theme, tier)
-        
-        # Generate email body
         body = self._generate_email_body(event_name, theme, organizer, tier)
         
         event["outreach_subject"] = subject
@@ -82,15 +66,16 @@ class OutreachEmailAgent(BaseAgent):
     def _generate_subject(self, event_name: str, theme: str, tier: str) -> str:
         """Generate professional subject line."""
         tier_indicator = "Partnership Inquiry" if "Tier 1" in tier else "Sponsorship Opportunity"
-        
-        return f"{self.COMPANY_NAME} - {tier_indicator}: {event_name}"
+        return f"{self.config.name} - {tier_indicator}: {event_name}"
     
     def _generate_email_body(self, event_name: str, theme: str, organizer: str, tier: str) -> str:
         """Generate concise email body (under 120 words)."""
+        contact_name = self.config.contact_name or "[Your Name]"
+        contact_title = self.config.contact_title or "[Your Title]"
         
         body = f"""Dear {organizer if organizer else 'Team'},
 
-I hope this email finds you well. My name is [Your Name] from {self.COMPANY_NAME}, a leader in {theme.title()} solutions.
+I hope this email finds you well. My name is {contact_name} from {self.config.name}, a leader in {theme.title()} solutions.
 
 We are interested in sponsoring {event_name} and would love to learn more about available sponsorship opportunities.
 
@@ -102,17 +87,15 @@ Specifically, we'd like to understand:
 Would you be available for a brief 15-minute call this week to discuss? We're excited about the possibility of partnering with you.
 
 Best regards,
-[Your Name]
-[Your Title]
-{self.COMPANY_NAME}"""
+{contact_name}
+{contact_title}
+{self.config.name}"""
         
-        # Trim to under 120 words
         word_count = len(body.split())
         if word_count > 120:
-            # Simplify the email
             body = f"""Dear {organizer if organizer else 'Team'},
 
-I'm [Your Name] from {self.COMPANY_NAME}, a {theme.title()} solutions provider.
+I'm {contact_name} from {self.config.name}, a {theme.title()} solutions provider.
 
 We're interested in sponsoring {event_name} and would like to learn about sponsorship opportunities.
 
@@ -121,7 +104,7 @@ Could you share details on sponsorship tiers, benefits, and attendee demographic
 I'd welcome a quick call to discuss. Please let me know your availability.
 
 Best regards,
-[Your Name]
-{self.COMPANY_NAME}"""
+{contact_name}
+{self.config.name}"""
         
         return body

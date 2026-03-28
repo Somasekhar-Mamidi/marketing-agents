@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-03-28T10:24:47.975486",
+  "models": [
+    "glm-flash-experimental",
+    "glm-latest",
+    "open-fast",
+    "open-large-sa"
+  ],
+  "results": [
+    {
+      "model": "glm-flash-experimental",
+      "status": "SUCCESS",
+      "latency_ms": 2888.8611793518066
+    },
+    {
+      "model": "glm-latest",
+      "status": "SUCCESS",
+      "latency_ms": 2395.029067993164
+    },
+    {
+      "model": "open-fast",
+      "status": "SUCCESS",
+      "latency_ms": 2518.3286666870117
+    },
+    {
+      "model": "open-large-sa",
+      "status": "SUCCESS",
+      "latency_ms": 2565.8302307128906
+    }
+  ]
+}

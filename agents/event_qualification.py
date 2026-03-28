@@ -128,7 +128,7 @@ class EventQualificationAgent(BaseAgent):
             results = self.search_tool.search(query, max_results=3)
             if results and results[0].get("content"):
                 scores["attendee_count"] = results[0]["content"][:200]
-        except Exception:
+        except (httpx.HTTPError, ConnectionError, TimeoutError):
             pass
         
         return scores

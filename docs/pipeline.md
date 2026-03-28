@@ -1,11 +1,11 @@
 # Pipeline Design
 
-The Marketing Agents Swarm uses a **sequential pipeline architecture** where agents execute one after another, passing results to the next agent.
+The Marketing Agents Swarm uses a **sequential pipeline architecture** where 8 agents execute one after another, passing results to the next agent.
 
 ## How It Works
 
 ```
-User Prompt
+User Inputs: Industry + Region + Theme + Time Range
     │
     ▼
 ┌─────────────────────────────────────────┐
@@ -14,14 +14,25 @@ User Prompt
 └─────────────────────────────────────────┘
     │
     ▼
-┌─────────┐    ┌─────────┐    ┌─────────┐
-│ Agent 1 │───▶│ Agent 2 │───▶│ Agent 3 │
-└─────────┘    └─────────┘    └─────────┘
-    │              │              │
-    ▼              ▼              ▼
- Findings     Findings      Final Output
- (context)    (context)
+┌─────────┐──┌─────────┐──┌─────────┐──┌─────────┐──┌─────────┐──┌─────────┐──┌─────────┐──┌─────────┐
+│Agent 0  │─▶│Agent 1  │─▶│Agent 2  │─▶│Agent 3  │─▶│Agent 4  │─▶│Agent 5  │─▶│Agent 6  │─▶│Agent 7  │
+│Schema   │  │Discovery│  │Qualify  │  │Scraper  │  │Intelligence│ │Prioritize│  │Email    │  │Excel    │
+│Init     │  │         │  │         │  │         │  │         │  │         │  │         │  │Export   │
+└─────────┘──└─────────┘──└─────────┘──└─────────┘──└─────────┘──└─────────┘──└─────────┘──┴─────────┘
 ```
+
+## 8-Agent Pipeline Details
+
+| # | Agent | Purpose | Input | Output |
+|---|-------|---------|-------|--------|
+| 0 | Schema Initialization | Create empty event structure | None | Empty events array |
+| 1 | Event Discovery | Find events with filters | Industry, Region, Theme | Raw event list |
+| 2 | Event Qualification | Score & tier events | Events | Scored events |
+| 3 | Event Website Scraper | Extract website details | Events with URLs | Enriched events |
+| 4 | Event Intelligence | Strategic analysis | Qualified events | Intelligence insights |
+| 5 | Event Prioritization | Sort & recommend | Analyzed events | Prioritized list |
+| 6 | Outreach Email | Generate sponsorship emails | Prioritized events | Email templates |
+| 7 | Excel Table Generator | Export to CSV/Excel | Complete events | CSV, JSON, Markdown |
 
 ## Execution Flow
 

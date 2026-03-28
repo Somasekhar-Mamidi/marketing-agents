@@ -3,8 +3,9 @@
 import json
 import logging
 import re
-from typing import Optional
+from typing import Dict, Any, Optional
 from agents.base import BaseAgent, AgentInput, AgentOutput
+from utils.web_scraper import EventWebsiteScraper
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,11 @@ class EventWebsiteScraperAgent(BaseAgent):
     name = "event_website_scraper"
     description = "Extracts detailed event info from official websites"
     
-    def execute(self, input_data: AgentInput) -> AgentInput:
+    def __init__(self, timeout: float = 30.0):
+        self.timeout = timeout
+        self.scraper = None
+    
+    def execute(self, input_data: AgentInput) -> AgentOutput:
         """Scrape event websites for detailed information."""
         self.validate_input(input_data)
         
@@ -41,52 +46,71 @@ class EventWebsiteScraperAgent(BaseAgent):
         
         scraped_events = []
         
-        for event in events:
-            scraped_event = self._scrape_event(event)
-            scraped_events.append(scraped_event)
+        with EventWebsiteScraper(timeout=self.timeout) as scraper:
+            for event in events:
+                scraped_event = self._scrape_event(event, scraper)
+                scraped_events.append(scraped_event)
         
-        logger.info(f"Scraped {len(scraped_events)} events")
+        successful = sum(1 for e in scraped_events if e.get("scraped_successfully", False))
+        logger.info(f"Scraped {len(scraped_events)} events, {successful} successful")
         
         return AgentOutput(
             agent_name=self.name,
             findings={"events": scraped_events},
-            metadata={"agent": self.name, "event_count": len(scraped_events)}
+            metadata={
+                "agent": self.name, 
+                "event_count": len(scraped_events),
+                "successful_scrapes": successful
+            }
         )
     
-    def _scrape_event(self, event: dict) -> dict:
+    def _scrape_event(self, event: dict, scraper: EventWebsiteScraper) -> dict:
         """Scrape a single event website."""
         website = event.get("event_website", "")
         
         if not website:
             event["status"] = "Website Missing"
+            event["scraped_successfully"] = False
             return event
         
-        # Note: In production, use playwright or similar to scrape websites
-        # For now, we'll search for the event details
-        
-        # Update with basic info if available
-        event["status"] = "Website Scraped"
-        
-        # These fields would be populated by actual web scraping
-        # In this implementation, we'll mark them for manual review
-        if not event.get("start_date"):
-            event["start_date"] = "Not Found"
-        if not event.get("end_date"):
-            event["end_date"] = "Not Found"
-        if not event.get("contact_email"):
-            event["contact_email"] = "Not Found"
-        if not event.get("contact_url"):
-            event["contact_url"] = "Not Found"
-        if not event.get("sponsorship_url"):
-            event["sponsorship_url"] = "Not Found"
-        if not event.get("summary"):
-            event["summary"] = event.get("theme", "") + " - Details to be confirmed"
-        if not event.get("industry_focus"):
-            event["industry_focus"] = event.get("theme", "Technology")
-        if not event.get("target_audience"):
-            event["target_audience"] = "Technology professionals"
-        if not event.get("technology_themes"):
-            event["technology_themes"] = event.get("theme", "")
+        try:
+            scraped_data = scraper.scrape_event_page(website)
+            
+            for key, value in scraped_data.items():
+                if key != "error" and value is not None:
+                    event[key] = value
+            
+            if scraped_data.get("scraped_successfully", False):
+                event["status"] = "Website Scraped"
+            else:
+                event["status"] = "Scrape Failed"
+                if scraped_data.get("error"):
+                    event["scrape_error"] = scraped_data["error"]
+            
+            if not event.get("start_date"):
+                event["start_date"] = "Not Found"
+            if not event.get("end_date"):
+                event["end_date"] = "Not Found"
+            if not event.get("contact_email"):
+                event["contact_email"] = "Not Found"
+            if not event.get("contact_url"):
+                event["contact_url"] = "Not Found"
+            if not event.get("sponsorship_url"):
+                event["sponsorship_url"] = "Not Found"
+            if not event.get("summary"):
+                event["summary"] = event.get("theme", "") + " - Details to be confirmed"
+            if not event.get("industry_focus"):
+                event["industry_focus"] = event.get("theme", "Technology")
+            if not event.get("target_audience"):
+                event["target_audience"] = "Technology professionals"
+            if not event.get("technology_themes"):
+                event["technology_themes"] = event.get("theme", "")
+            
+        except Exception as e:
+            logger.error(f"Failed to scrape {website}: {e}")
+            event["status"] = "Scrape Error"
+            event["scrape_error"] = str(e)
+            event["scraped_successfully"] = False
         
         return event
     

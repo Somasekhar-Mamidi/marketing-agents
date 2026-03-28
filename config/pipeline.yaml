@@ -1,14 +1,183 @@
 # Pipeline Configuration
-# Defines which agents are enabled and their execution order
+# Defines agent execution order, parameters, and feature toggles
 
 pipeline:
-  name: "marketing-research-pipeline"
-  description: "Sequential research agent pipeline"
+  name: "event-research-pipeline"
+  description: "Marketing event discovery and qualification pipeline"
+  version: "1.0.0"
   
+  # Global pipeline settings
+  settings:
+    max_events_per_run: 50
+    max_vendors_per_event: 10
+    enable_checkpoints: true
+    auto_approve_checkpoints: false
+    continue_on_error: true
+    log_level: "INFO"
+    
+  # Agent execution sequence
   agents:
-    # Add your agents here with their configuration
-    # Example:
-    # - agent_name: "competitor_scout"
-    #   enabled: true
-    #   parameters:
-    #     max_results: 10
+    - name: "schema_initialization"
+      enabled: true
+      class: "agents.schema_initialization.SchemaInitializationAgent"
+      
+    - name: "intent_understanding"
+      enabled: true
+      class: "agents.intent_understanding.IntentUnderstandingAgent"
+      
+    - name: "event_discovery"
+      enabled: true
+      class: "agents.event_discovery.EventDiscoveryAgent"
+      parameters:
+        max_events: 50
+        default_provider: "auto"
+        
+    - name: "vendor_discovery"
+      enabled: true
+      class: "agents.vendor_discovery.VendorDiscoveryAgent"
+      parameters:
+        max_vendors_per_event: 10
+        
+    - name: "event_qualification"
+      enabled: true
+      class: "agents.event_qualification.EventQualificationAgent"
+      parameters:
+        min_attendees: 100
+        
+    - name: "event_website_scraper"
+      enabled: true
+      class: "agents.event_website_scraper.EventWebsiteScraperAgent"
+      parameters:
+        timeout_seconds: 30
+        max_retries: 3
+        
+    - name: "event_intelligence"
+      enabled: true
+      class: "agents.event_intelligence.EventIntelligenceAgent"
+      
+    - name: "event_prioritization"
+      enabled: true
+      class: "agents.event_prioritization.EventPrioritizationAgent"
+      
+    - name: "outreach_email"
+      enabled: true
+      class: "agents.outreach_email.OutreachEmailAgent"
+      
+    - name: "excel_table_generator"
+      enabled: true
+      class: "agents.excel_table_generator.ExcelTableGeneratorAgent"
+
+# Industry keywords for intent understanding
+industries:
+  fintech:
+    keywords: ["fintech", "financial technology", "digital banking", "payments"]
+    target_score_multiplier: 1.2
+  payments:
+    keywords: ["payments", "payment processing", "digital payments", "merchant services"]
+    target_score_multiplier: 1.3
+  ai:
+    keywords: ["ai", "artificial intelligence", "machine learning", "ml", "generative ai"]
+    target_score_multiplier: 1.1
+  crypto:
+    keywords: ["crypto", "cryptocurrency", "blockchain", "web3", "defi"]
+    target_score_multiplier: 1.0
+  insurtech:
+    keywords: ["insurtech", "insurance technology", "digital insurance"]
+    target_score_multiplier: 1.1
+
+# Regional mappings
+regions:
+  usa:
+    keywords: ["usa", "us", "united states", "america"]
+    cities: ["New York", "San Francisco", "Chicago", "Austin", "Boston"]
+  europe:
+    keywords: ["europe", "eu", "uk", "london", "berlin", "paris"]
+    cities: ["London", "Berlin", "Paris", "Amsterdam", "Dublin"]
+  apac:
+    keywords: ["apac", "asia pacific", "singapore", "hong kong", "tokyo"]
+    cities: ["Singapore", "Hong Kong", "Tokyo", "Sydney", "Bangalore"]
+
+# Event type mappings
+event_types:
+  conference:
+    keywords: ["conference", "summit", "convention", "symposium"]
+    weight: 1.0
+  exhibition:
+    keywords: ["expo", "exhibition", "trade show", "fair"]
+    weight: 0.9
+  forum:
+    keywords: ["forum", "roundtable", "dialogue"]
+    weight: 0.8
+  workshop:
+    keywords: ["workshop", "bootcamp", "training", "masterclass"]
+    weight: 0.7
+
+# Qualification scoring weights
+scoring:
+  weights:
+    audience_relevance: 0.25
+    industry_reputation: 0.20
+    attendance: 0.20
+    sponsor_value: 0.20
+    regional_importance: 0.15
+  
+  tiers:
+    tier_1:
+      name: "Tier 1 - High Priority"
+      min_score: 8.0
+      color: "#28a745"
+    tier_2:
+      name: "Tier 2 - Medium-High Priority"
+      min_score: 6.5
+      color: "#17a2b8"
+    tier_3:
+      name: "Tier 3 - Medium Priority"
+      min_score: 5.0
+      color: "#ffc107"
+    tier_4:
+      name: "Tier 4 - Low Priority"
+      min_score: 0.0
+      color: "#6c757d"
+
+# Search configuration
+search:
+  providers:
+    - name: "tavily"
+      priority: 1
+      timeout: 30
+    - name: "serper"
+      priority: 2
+      timeout: 30
+    - name: "search1api"
+      priority: 3
+      timeout: 30
+    - name: "duckduckgo"
+      priority: 4
+      timeout: 45
+  
+  defaults:
+    max_results: 10
+    cache_ttl_seconds: 86400  # 24 hours
+
+# Cache configuration
+cache:
+  search_results:
+    ttl_seconds: 86400  # 24 hours
+  website_data:
+    ttl_seconds: 604800  # 7 days
+  qualification_scores:
+    ttl_seconds: 2592000  # 30 days
+
+# Rate limiting
+rate_limits:
+  requests_per_minute: 60
+  requests_per_hour: 1000
+  burst_size: 10
+
+# API configuration
+api:
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:3001"
+  max_request_size: "10MB"
+  timeout_seconds: 300

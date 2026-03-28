@@ -2,9 +2,11 @@
 
 import json
 import logging
+from typing import Optional
 from agents.base import BaseAgent, AgentInput, AgentOutput
 from schema import get_empty_schema
 from utils.search import WebSearchTool
+from utils.deduplication import deduplicate_events, is_duplicate_event
 
 logger = logging.getLogger(__name__)
 
@@ -56,16 +58,38 @@ class EventDiscoveryAgent(BaseAgent):
         self.max_events = max_events
     
     def execute(self, input_data: AgentInput) -> AgentOutput:
-        """Discover events based on user inputs."""
+        """Execute event discovery."""
         self.validate_input(input_data)
         
-        # Get user inputs from parameters
         params = input_data.parameters
-        industry = params.get("industry", input_data.query)
-        region = params.get("region", "")
-        theme = params.get("theme", "")
         
-        logger.info(f"Event Discovery: Industry={industry}, Region={region}, Theme={theme}")
+        intent_data = input_data.context.get("intent")
+        regions = []
+        
+        if intent_data:
+            logger.info("Using structured intent for event discovery")
+            search_queries = intent_data.get("search_queries", [])
+            industry = intent_data.get("industry", input_data.query)
+            regions = intent_data.get("regions", [])
+            quality_requirements = intent_data.get("quality_requirements", {})
+            max_events = params.get("max_events", self.max_events)
+            
+            logger.info(f"Event Discovery (Intent-based): Industry={industry}, "
+                       f"Regions={regions}, Queries={len(search_queries)}, MaxEvents={max_events}")
+        else:
+            industry = params.get("industry", input_data.query)
+            region = params.get("region", "")
+            theme = params.get("theme", "")
+            max_events = params.get("max_events", self.max_events)
+            quality_requirements = {}
+            
+            logger.info(f"Event Discovery: Industry={industry}, Region={region}, "
+                       f"Theme={theme}, MaxEvents={max_events}")
+            
+            search_queries = self._build_search_queries(industry, region, theme)
+        
+        region = params.get("region", "") if not intent_data else (regions[0] if regions else "")
+        theme = params.get("theme", "")
         
         # Get existing events from context or start fresh
         existing_data = input_data.context.get("events", [])
@@ -78,12 +102,9 @@ class EventDiscoveryAgent(BaseAgent):
         
         events = []
         
-        # Build search query based on inputs
-        search_queries = self._build_search_queries(industry, region, theme)
-        
         for search_query in search_queries:
             try:
-                results = self.search_tool.search(search_query, max_results=10)
+                results = self.search_tool.search(search_query, max_results=20)
                 
                 for result in results:
                     event = self._parse_search_result(result, industry)
@@ -96,18 +117,24 @@ class EventDiscoveryAgent(BaseAgent):
                         else:
                             logger.info(f"Excluded: {event.get('event_name')}")
                         
-                        if len(events) >= self.max_events:
+                        if len(events) >= max_events:
                             break
                 
-                if len(events) >= self.max_events:
+                if len(events) >= max_events:
                     break
                     
-            except Exception as e:
+            except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
                 logger.warning(f"Search failed for '{search_query}': {e}")
                 continue
         
         # Filter out events with uncertain dates
         events = self._filter_uncertain_dates(events)
+        
+        # Apply quality scoring if intent data available
+        if intent_data and events:
+            events = self._score_events_by_intent(events, intent_data)
+            # Sort by score (highest first)
+            events.sort(key=lambda x: x.get("discovery_score", 0), reverse=True)
         
         logger.info(f"Discovered {len(events)} qualified events")
         
@@ -129,25 +156,30 @@ class EventDiscoveryAgent(BaseAgent):
         )
     
     def _build_search_queries(self, industry: str, region: str, theme: str) -> list:
-        """Build search queries based on user inputs."""
         queries = []
         
-        # Primary queries - industry-wide events
+        if region:
+            target_regions = [region]
+        else:
+            target_regions = ["USA", "Europe", "APAC", "Middle East", "Asia", "India", "Brazil"]
+        
         base_terms = [
-            f"{industry} {theme} conference 2025 2026" if theme else f"{industry} conference summit 2025 2026",
-            f"{industry} payments conference 2025 2026" if industry.lower() == "payments" else f"{industry} summit expo 2025 2026",
+            f"{industry} conference summit 2025 2026",
+            f"{industry} expo forum festival 2025 2026",
+            f"{industry} payments conference 2025 2026" if industry.lower() == "payments" else f"{industry} tech conference 2025 2026",
+            f"{industry} event exhibition 2025 2026",
+            f"{industry} meetup workshop networking 2025 2026",
+            f"{industry} financial technology conference 2025 2026",
+            f"{industry} digital payments summit 2025 2026",
+            f"{industry} banking fintech event 2025 2026",
         ]
         
-        for query in base_terms:
-            if region:
-                queries.append(f"{query} {region}")
-            else:
-                queries.append(query)
-                # Add common regions
-                for r in ["USA", "Europe", "APAC", "Middle East", "Dubai", "Singapore"]:
-                    queries.append(f"{query} {r}")
+        for r in target_regions:
+            for query in base_terms:
+                queries.append(f"{query} {r}")
+                queries.append(f"{industry} {r} conference 2025 2026")
+                queries.append(f"{industry} {r} summit 2025 2026")
         
-        # Remove duplicates while preserving order
         seen = set()
         unique_queries = []
         for q in queries:
@@ -155,7 +187,7 @@ class EventDiscoveryAgent(BaseAgent):
                 seen.add(q.lower())
                 unique_queries.append(q)
         
-        return unique_queries[:10]  # Limit queries
+        return unique_queries[:30]
     
     def _should_include_event(self, event: dict, industry: str) -> bool:
         """Apply filters to determine if event should be included."""
@@ -228,7 +260,7 @@ class EventDiscoveryAgent(BaseAgent):
         
         return filtered
     
-    def _parse_search_result(self, result: dict, industry: str) -> dict | None:
+    def _parse_search_result(self, result: dict, industry: str) -> Optional[dict]:
         """Parse a search result into event schema."""
         title = result.get("title", "")
         url = result.get("url", "")
@@ -315,3 +347,129 @@ class EventDiscoveryAgent(BaseAgent):
                 return True
         
         return False
+    
+    def _score_events_by_intent(self, events: list, intent_data: dict) -> list:
+        """Score events based on alignment with user intent."""
+        scored_events = []
+        
+        target_industry = intent_data.get("industry", "").lower()
+        target_regions = [r.lower() for r in intent_data.get("regions", [])]
+        target_event_types = [t.lower() for t in intent_data.get("event_types", [])]
+        quality_reqs = intent_data.get("quality_requirements", {})
+        min_score_threshold = quality_reqs.get("relevance_threshold", 0.5)
+        
+        for event in events:
+            score = 0.0
+            score_breakdown = {}
+            
+            # 1. Industry match (25% weight)
+            event_theme = event.get("theme", "").lower()
+            event_name = event.get("event_name", "").lower()
+            event_summary = event.get("summary", "").lower()
+            
+            industry_score = 0
+            if target_industry in event_theme or target_industry in event_name:
+                industry_score = 1.0
+            elif target_industry in event_summary:
+                industry_score = 0.7
+            else:
+                # Check related industries
+                related = intent_data.get("sub_industries", [])
+                for rel in related:
+                    if rel.lower() in event_summary:
+                        industry_score = 0.5
+                        break
+            
+            score += industry_score * 0.25
+            score_breakdown["industry_match"] = industry_score * 0.25
+            
+            # 2. Region/location match (20% weight)
+            event_city = event.get("city", "").lower()
+            event_country = event.get("country", "").lower()
+            
+            region_score = 0
+            if target_regions and target_regions[0] != "global":
+                location_text = f"{event_city} {event_country}"
+                for region in target_regions:
+                    if region in location_text or region in event_name:
+                        region_score = 1.0
+                        break
+                if not region_score:
+                    region_score = 0.3  # Partial credit for having location data
+            else:
+                region_score = 0.8  # Global search, no penalty
+            
+            score += region_score * 0.20
+            score_breakdown["region_match"] = region_score * 0.20
+            
+            # 3. Event type match (15% weight)
+            type_score = 0
+            for event_type in target_event_types:
+                if event_type in event_name:
+                    type_score = 1.0
+                    break
+            if not type_score:
+                # Check for general event keywords
+                event_keywords = ["conference", "summit", "expo", "forum", "festival"]
+                if any(kw in event_name for kw in event_keywords):
+                    type_score = 0.7
+            
+            score += type_score * 0.15
+            score_breakdown["event_type_match"] = type_score * 0.15
+            
+            # 4. Date quality (15% weight)
+            start_date = event.get("start_date", "")
+            expected_date = event.get("expected_date", "")
+            date_verified = event.get("date_verified", False)
+            
+            date_score = 0
+            if start_date and start_date != "Not Found":
+                date_score = 1.0
+            elif expected_date and expected_date != "Not Found":
+                if "2025" in expected_date or "2026" in expected_date:
+                    date_score = 0.7
+                else:
+                    date_score = 0.4
+            
+            score += date_score * 0.15
+            score_breakdown["date_quality"] = date_score * 0.15
+            
+            # 5. Content richness (15% weight)
+            summary_len = len(event.get("summary", ""))
+            website = event.get("event_website", "")
+            
+            content_score = 0
+            if summary_len > 300:
+                content_score = 1.0
+            elif summary_len > 100:
+                content_score = 0.6
+            elif summary_len > 0:
+                content_score = 0.3
+            
+            if website and "." in website:
+                content_score += 0.2
+            
+            score += min(content_score, 1.0) * 0.15
+            score_breakdown["content_richness"] = min(content_score, 1.0) * 0.15
+            
+            # 6. Exclusion penalty (negative scoring)
+            excluded_keywords = intent_data.get("excluded_keywords", [])
+            exclusion_penalty = 0
+            for excluded in excluded_keywords:
+                if excluded.lower() in event_name or excluded.lower() in event_summary:
+                    exclusion_penalty += 0.3
+            
+            score -= min(exclusion_penalty, 0.5)  # Cap penalty at 0.5
+            
+            # Normalize to 0-100 scale
+            final_score = max(0, min(100, int(score * 100)))
+            
+            # Add score to event
+            event["discovery_score"] = final_score
+            event["discovery_score_breakdown"] = score_breakdown
+            
+            # Only include if meets minimum threshold
+            if final_score >= (min_score_threshold * 100):
+                scored_events.append(event)
+        
+        return scored_events

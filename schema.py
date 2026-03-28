@@ -59,3 +59,18 @@ EVENT_SCHEMA = {
 def get_empty_schema() -> dict:
     """Return an empty schema to start the pipeline."""
     return {"events": []}
+
+
+def get_initialized_schema(industry: str = "", region: str = "", theme: str = "", 
+                           time_range: str = "12") -> dict:
+    return {
+        "events": [],
+        "metadata": {
+            "initialized": True,
+            "industry": industry,
+            "region": region,
+            "theme": theme,
+            "time_range_months": time_range,
+            "schema_version": "1.0"
+        }
+    }

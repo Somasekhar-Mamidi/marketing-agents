@@ -10,6 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pipeline.orchestrator import Pipeline
+from agents.schema_initialization import SchemaInitializationAgent
+from agents.intent_understanding import IntentUnderstandingAgent
 from agents.event_discovery import EventDiscoveryAgent
 from agents.event_qualification import EventQualificationAgent
 from agents.event_website_scraper import EventWebsiteScraperAgent
@@ -17,6 +19,7 @@ from agents.event_intelligence import EventIntelligenceAgent
 from agents.event_prioritization import EventPrioritizationAgent
 from agents.outreach_email import OutreachEmailAgent
 from agents.excel_table_generator import ExcelTableGeneratorAgent
+from agents.vendor_discovery import VendorDiscoveryAgent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,13 +32,16 @@ def create_pipeline(provider: str = "tavily") -> Pipeline:
     """Create and configure the event research pipeline.
     
     Pipeline flow:
-    1. Event Discovery - Find events globally (with filters)
-    2. Event Qualification - Score and tier events
-    3. Event Website Scraper - Extract website details
-    4. Event Intelligence - Strategic analysis
-    5. Event Prioritization - Sort and recommend
-    6. Outreach Email - Generate sponsorship emails
-    7. Excel Table Generator - Output Excel-ready format
+    1. Schema Initialization - Initialize empty event structure
+    2. Intent Understanding - Parse user query into structured parameters
+    3. Event Discovery - Find events globally (with filters)
+    4. Vendor Discovery - Find sponsors/exhibitors for events
+    5. Event Qualification - Score and tier events
+    6. Event Website Scraper - Extract website details
+    7. Event Intelligence - Strategic analysis
+    8. Event Prioritization - Sort and recommend
+    9. Outreach Email - Generate sponsorship emails
+    10. Excel Table Generator - Output Excel-ready format
     
     Returns:
         Configured Pipeline instance
@@ -43,7 +49,10 @@ def create_pipeline(provider: str = "tavily") -> Pipeline:
     pipeline = Pipeline()
     
     # Add all event research agents in sequence
+    pipeline.add_agent(SchemaInitializationAgent())
+    pipeline.add_agent(IntentUnderstandingAgent())
     pipeline.add_agent(EventDiscoveryAgent(max_events=50, provider=provider))
+    pipeline.add_agent(VendorDiscoveryAgent(max_vendors_per_event=10))
     pipeline.add_agent(EventQualificationAgent())
     pipeline.add_agent(EventWebsiteScraperAgent())
     pipeline.add_agent(EventIntelligenceAgent())
@@ -79,6 +88,10 @@ def run_command(args):
     if args.theme:
         params["theme"] = args.theme
         logger.info(f"Theme: {args.theme}")
+    
+    if args.time_range:
+        params["time_range"] = args.time_range
+        logger.info(f"Time Range: {args.time_range} months")
     
     # Build query from inputs
     query = args.prompt or f"{args.industry or 'Technology'} events"
@@ -207,6 +220,12 @@ Examples:
         default="auto",
         choices=["auto", "tavily", "serper", "search1api", "duckduckgo"],
         help="Search provider (auto=tavily→serper→search1api→duckduckgo)"
+    )
+    run_parser.add_argument(
+        "--time-range",
+        default="12",
+        choices=["12", "24"],
+        help="Time range in months (default: 12)"
     )
     run_parser.set_defaults(func=run_command)
     

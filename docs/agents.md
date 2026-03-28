@@ -8,6 +8,7 @@ The pipeline accepts these inputs:
 - **Industry**: FinTech, Payments, Artificial Intelligence, Technology, etc.
 - **Region**: USA, Europe, APAC, Middle East, Asia, global
 - **Theme**: Specific topic (digital payments, blockchain, machine learning, etc.)
+- **Time Range**: 12 or 24 months (how far ahead to look for events)
 
 ## Filtering Rules
 
@@ -80,6 +81,7 @@ All agents share a common JSON schema for passing data:
 
 | Agent Name | Description | Status |
 |------------|--------------|--------|
+| Schema Initialization Agent | Initializes the workflow with standard JSON schema | ✅ Active |
 | Event Discovery Agent | Discovers industry events with smart filtering | ✅ Active |
 | Event Qualification Agent | Scores events for sponsorship potential | ✅ Active |
 | Event Website Scraper Agent | Extracts event details from websites | ✅ Active |
@@ -93,7 +95,12 @@ All agents share a common JSON schema for passing data:
 ## Agent Pipeline Flow
 
 ```
-User Inputs: Industry + Region + Theme
+User Inputs: Industry + Region + Theme + Time Range
+    │
+    ▼
+┌─────────────────────────────────────┐
+│   Schema Initialization Agent       │ ← Creates empty event structure
+└─────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────┐
@@ -122,7 +129,7 @@ User Inputs: Industry + Region + Theme
     │
     ▼
 ┌─────────────────────────────────────┐
-│   Outreach Email Agent               │ ← Generates outreach
+│   Outreach Email Agent              │ ← Generates outreach
 └─────────────────────────────────────┘
     │
     ▼
@@ -134,6 +141,11 @@ User Inputs: Industry + Region + Theme
 ---
 
 ## Agent Details
+
+### 0. Schema Initialization Agent
+- **Input**: None (first agent in pipeline)
+- **Creates**: Empty event data structure with metadata
+- **Output**: {"events": [], "metadata": {...}}
 
 ### 1. Event Discovery Agent
 - **Input**: Industry, Region, Theme (from CLI)
