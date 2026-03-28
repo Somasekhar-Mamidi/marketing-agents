@@ -60,6 +60,9 @@ class EventDiscoveryAgent(BaseAgent):
     def execute(self, input_data: AgentInput) -> AgentOutput:
         """Execute event discovery."""
         self.validate_input(input_data)
+        import time
+        start_time = time.time()
+        max_execution_time = 120  # 2 minute timeout
         
         params = input_data.parameters
         
@@ -339,7 +342,10 @@ class EventDiscoveryAgent(BaseAgent):
         event_name = event.get("event_name", "").lower()
         event_url = event.get("event_website", "").lower()
         
-        for existing in events:
+        # Limit comparison to last 50 events for performance
+        events_to_check = events[-50:] if len(events) > 50 else events
+        
+        for existing in events_to_check:
             existing_name = existing.get("event_name", "").lower()
             existing_url = existing.get("event_website", "").lower()
             
