@@ -64,6 +64,7 @@ The pipeline automatically applies these filters:
 
 | # | Agent | Purpose |
 |---|-------|---------|
+| 0 | Schema Initialization | Initialize empty event structure |
 | 1 | Event Discovery | Find events (with vendor/industry filters) |
 | 2 | Event Qualification | Score & tier events (1-10 scale) |
 | 3 | Event Website Scraper | Extract details from event websites |
@@ -79,6 +80,7 @@ The pipeline automatically applies these filters:
 | `--industry` | Yes | Industry (FinTech, Payments, AI, Technology, etc.) |
 | `--region` | No | Region (USA, Europe, APAC, Middle East, Asia, global) |
 | `--theme` | No | Specific theme (digital payments, blockchain, etc.) |
+| `--time-range` | No | Months ahead (12 or 24, default: 12) |
 | `--output` | No | Output file (default: event_pipeline_results.json) |
 
 ## Project Structure
@@ -114,4 +116,22 @@ marketing_agents/
 The pipeline generates:
 - **JSON file**: Full results with all event data
 - **CSV output**: For Excel/Google Sheets import
+- **Markdown output**: For documentation
 - **Console summary**: Top events with scores and tiers
+
+## Web UI
+
+A Streamlit web interface is available at `app.py`. Features:
+
+```bash
+# Run the web UI
+streamlit run app.py
+```
+
+### UI Features:
+- **Sidebar Configuration**: Industry, Region, Theme, Time Range selectors
+- **Metrics Dashboard**: Events discovered, Tier 1/2 counts, average score
+- **Interactive Table**: Filter by tier, sort by score/date/name
+- **Event Details Panel**: Tabbed view (Overview, Website, Intelligence, Outreach)
+- **Email Panel**: Copy email, open email client
+- **Export Options**: Download CSV, JSON, or Markdown
