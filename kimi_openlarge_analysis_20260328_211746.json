@@ -1,0 +1,232 @@
+{
+  "timestamp": "2026-03-28T21:17:46",
+  "models": [
+    "kimi-latest",
+    "open-large"
+  ],
+  "test_scenarios": [
+    {
+      "agent_type": "intent_understanding",
+      "description": "Complex reasoning - parse multi-faceted user intent",
+      "expected": "Detailed reasoning, structured output"
+    },
+    {
+      "agent_type": "event_qualification",
+      "description": "Judgment/Scoring - evaluate event quality with nuanced reasoning",
+      "expected": "Nuanced judgment, balanced scoring"
+    },
+    {
+      "agent_type": "event_website_scraper",
+      "description": "Structured extraction - precise data parsing",
+      "expected": "Accurate extraction, strict format adherence"
+    },
+    {
+      "agent_type": "outreach_email",
+      "description": "Creative writing - persuasive professional communication",
+      "expected": "Creative, persuasive, concise writing"
+    },
+    {
+      "agent_type": "event_intelligence",
+      "description": "Long context analysis - research synthesis",
+      "expected": "Strategic thinking, synthesis of multiple factors"
+    },
+    {
+      "agent_type": "excel_table_generator",
+      "description": "Structured formatting - data presentation",
+      "expected": "Clean formatting, sorting, structure"
+    },
+    {
+      "agent_type": "vendor_discovery",
+      "description": "Research - finding contact information and vendors",
+      "expected": "Research synthesis, contact identification"
+    }
+  ],
+  "results": {
+    "kimi-latest": [
+      {
+        "agent_type": "intent_understanding",
+        "description": "Complex reasoning - parse multi-faceted user intent",
+        "status": "SUCCESS",
+        "latency_ms": 6483.61,
+        "prompt_tokens": 558,
+        "completion_tokens": 500,
+        "total_tokens": 1058,
+        "response_length": 2063,
+        "word_count": 287,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "event_qualification",
+        "description": "Judgment/Scoring - evaluate event quality with nuanced reasoning",
+        "status": "SUCCESS",
+        "latency_ms": 12018.69,
+        "prompt_tokens": 640,
+        "completion_tokens": 800,
+        "total_tokens": 1440,
+        "response_length": 3363,
+        "word_count": 523,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "event_website_scraper",
+        "description": "Structured extraction - precise data parsing",
+        "status": "SUCCESS",
+        "latency_ms": 4840.42,
+        "prompt_tokens": 639,
+        "completion_tokens": 377,
+        "total_tokens": 1016,
+        "response_length": 361,
+        "word_count": 31,
+        "has_structure": true,
+        "has_json": true
+      },
+      {
+        "agent_type": "outreach_email",
+        "description": "Creative writing - persuasive professional communication",
+        "status": "SUCCESS",
+        "latency_ms": 11719.66,
+        "prompt_tokens": 561,
+        "completion_tokens": 300,
+        "total_tokens": 861,
+        "response_length": 1204,
+        "word_count": 184,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "event_intelligence",
+        "description": "Long context analysis - research synthesis",
+        "status": "SUCCESS",
+        "latency_ms": 8691.86,
+        "prompt_tokens": 667,
+        "completion_tokens": 700,
+        "total_tokens": 1367,
+        "response_length": 36,
+        "word_count": 6,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "excel_table_generator",
+        "description": "Structured formatting - data presentation",
+        "status": "SUCCESS",
+        "latency_ms": 3883.65,
+        "prompt_tokens": 636,
+        "completion_tokens": 300,
+        "total_tokens": 936,
+        "response_length": 157,
+        "word_count": 23,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "vendor_discovery",
+        "description": "Research - finding contact information and vendors",
+        "status": "SUCCESS",
+        "latency_ms": 5080.35,
+        "prompt_tokens": 591,
+        "completion_tokens": 400,
+        "total_tokens": 991,
+        "response_length": 13,
+        "word_count": 2,
+        "has_structure": true,
+        "has_json": false
+      }
+    ],
+    "open-large": [
+      {
+        "agent_type": "intent_understanding",
+        "description": "Complex reasoning - parse multi-faceted user intent",
+        "status": "SUCCESS",
+        "latency_ms": 9435.19,
+        "prompt_tokens": 558,
+        "completion_tokens": 500,
+        "total_tokens": 1058,
+        "response_length": 2195,
+        "word_count": 315,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "event_qualification",
+        "description": "Judgment/Scoring - evaluate event quality with nuanced reasoning",
+        "status": "SUCCESS",
+        "latency_ms": 13854.39,
+        "prompt_tokens": 640,
+        "completion_tokens": 800,
+        "total_tokens": 1440,
+        "response_length": 3360,
+        "word_count": 495,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "event_website_scraper",
+        "description": "Structured extraction - precise data parsing",
+        "status": "SUCCESS",
+        "latency_ms": 4781.26,
+        "prompt_tokens": 639,
+        "completion_tokens": 375,
+        "total_tokens": 1014,
+        "response_length": 361,
+        "word_count": 31,
+        "has_structure": true,
+        "has_json": true
+      },
+      {
+        "agent_type": "outreach_email",
+        "description": "Creative writing - persuasive professional communication",
+        "status": "SUCCESS",
+        "latency_ms": 5117.03,
+        "prompt_tokens": 561,
+        "completion_tokens": 300,
+        "total_tokens": 861,
+        "response_length": 1326,
+        "word_count": 195,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "event_intelligence",
+        "description": "Long context analysis - research synthesis",
+        "status": "SUCCESS",
+        "latency_ms": 8674.68,
+        "prompt_tokens": 667,
+        "completion_tokens": 700,
+        "total_tokens": 1367,
+        "response_length": 2912,
+        "word_count": 421,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "excel_table_generator",
+        "description": "Structured formatting - data presentation",
+        "status": "SUCCESS",
+        "latency_ms": 5055.32,
+        "prompt_tokens": 636,
+        "completion_tokens": 300,
+        "total_tokens": 936,
+        "response_length": 153,
+        "word_count": 22,
+        "has_structure": true,
+        "has_json": false
+      },
+      {
+        "agent_type": "vendor_discovery",
+        "description": "Research - finding contact information and vendors",
+        "status": "SUCCESS",
+        "latency_ms": 5186.4,
+        "prompt_tokens": 591,
+        "completion_tokens": 400,
+        "total_tokens": 991,
+        "response_length": 2044,
+        "word_count": 290,
+        "has_structure": true,
+        "has_json": false
+      }
+    ]
+  }
+}
