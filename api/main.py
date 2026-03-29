@@ -609,6 +609,8 @@ async def start_pipeline(
         "events_count": 0,
         "vendors_count": 0,
         "errors": [],
+        "agent_outputs": {},
+        "completed_agents": [],
         "enable_checkpoints": request.enable_checkpoints,
         "auto_approve": request.auto_approve
     }
@@ -651,6 +653,7 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
             context={"industry": request.industry or "", "region": request.region or ""}
         )
         intent_output = intent_agent.execute(intent_input)
+        _store_agent_output(run, "intent_understanding", intent_output)
         intent_data = intent_output.findings.get("intent", {})
         
         logger.info(f"Intent understood with {intent_data.get('confidence', 0)}% confidence")
@@ -670,6 +673,7 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
             }
         )
         discovery_output = discovery_agent.execute(discovery_input)
+        _store_agent_output(run, "event_discovery", discovery_output)
         events = discovery_output.findings.get("events", [])
         
         # Save events
@@ -713,6 +717,7 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
                 context={"events": events, "intent": intent_data}
             )
             qualification_output = qualification_agent.execute(qualification_input)
+            _store_agent_output(run, "event_qualification", qualification_output)
             qualified_events = qualification_output.findings.get("scored_events", events)
         
         # Step 4: Vendor Discovery (for service providers like booth builders)
@@ -737,6 +742,7 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
                 }
             )
             vendor_output = vendor_discovery_agent.execute(vendor_input)
+            _store_agent_output(run, "vendor_discovery", vendor_output)
             vendors = vendor_output.findings.get("vendors", [])
         elif qualified_events:
             # Traditional vendor discovery for events
@@ -765,6 +771,7 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
                 context={"events": qualified_events}
             )
             scraper_output = scraper_agent.execute(scraper_input)
+            _store_agent_output(run, "event_website_scraper", scraper_output)
             scraped_events = scraper_output.findings.get("events", qualified_events)
         
         # Step 6: Event Intelligence
@@ -778,6 +785,7 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
                 context={"events": qualified_events}
             )
             intel_output = intelligence_agent.execute(intel_input)
+            _store_agent_output(run, "event_intelligence", intel_output)
         
         # Step 7: Event Prioritization
         run["current_agent"] = "event_prioritization"
@@ -790,6 +798,7 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
                 context={"events": qualified_events}
             )
             priority_output = prioritization_agent.execute(priority_input)
+            _store_agent_output(run, "event_prioritization", priority_output)
             prioritized_events = priority_output.findings.get("prioritized_events", qualified_events)
         
         # Step 8: Outreach Email
@@ -806,6 +815,7 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
                 }
             )
             email_output = email_agent.execute(email_input)
+            _store_agent_output(run, "outreach_email", email_output)
         
         run["progress_percent"] = 100
         run["status"] = "completed"
@@ -819,6 +829,20 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
         run["errors"].append(str(e))
         run["completed_at"] = datetime.utcnow().isoformat()
 
+
+def _store_agent_output(run: dict, agent_name: str, output: any):
+    # Store per-agent outputs into the active run state.
+    if "agent_outputs" not in run:
+        run["agent_outputs"] = {}
+    if "completed_agents" not in run:
+        run["completed_agents"] = []
+    run["agent_outputs"][agent_name] = {
+        "findings": output.findings if hasattr(output, 'findings') else {},
+        "metadata": output.metadata if hasattr(output, 'metadata') else {},
+        "status": output.status if hasattr(output, 'status') else 'success'
+    }
+    if agent_name not in run["completed_agents"]:
+        run["completed_agents"].append(agent_name)
 
 @app.get("/pipeline/{pipeline_id}/status", response_model=PipelineStatusResponse)
 async def get_pipeline_status(pipeline_id: str):
@@ -1010,6 +1034,7 @@ async def stream_pipeline_updates(pipeline_id: str):
     async def event_generator():
         last_status = None
         last_progress = -1
+        last_completed_agents: List[str] = []
         
         while True:
             run = active_runs.get(pipeline_id)
@@ -1021,6 +1046,7 @@ async def stream_pipeline_updates(pipeline_id: str):
             current_status = run.get("status")
             current_progress = run.get("progress_percent", 0)
             
+            # Emit updates on status/progress changes
             if current_status != last_status or current_progress != last_progress:
                 last_status = current_status
                 last_progress = current_progress
@@ -1036,8 +1062,21 @@ async def stream_pipeline_updates(pipeline_id: str):
                 }
                 yield f"data: {json.dumps(data)}\n\n"
             
+            # Detect newly completed agents and stream their outputs
+            completed_agents = run.get("completed_agents", [])
+            newly_completed = [a for a in completed_agents if a not in last_completed_agents]
+            for agent in newly_completed:
+                yield f"data: {json.dumps({'type': 'agent_complete', 'pipeline_id': pipeline_id, 'completed_agent': agent, 'agent_output': run.get('agent_outputs', {}).get(agent, {})})}\n\n"
+            last_completed_agents = completed_agents
+            
+            # If pipeline finished, emit final aggregated outputs and exit
             if current_status in ["completed", "failed", "cancelled"]:
-                yield f"data: {json.dumps({'type': 'complete', 'status': current_status})}\n\n"
+                final_payload = {
+                    'type': 'complete',
+                    'status': current_status,
+                    'agent_outputs': run.get('agent_outputs', {})
+                }
+                yield f"data: {json.dumps(final_payload)}\n\n"
                 break
             
             await asyncio.sleep(2)
