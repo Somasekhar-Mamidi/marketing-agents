@@ -3,201 +3,187 @@
 import logging
 from typing import Optional
 from agents.base import BaseAgent, AgentInput, AgentOutput
-from utils.search import WebSearchTool
+from utils.llm_helpers import extract_json_from_response, EVENT_QUALIFICATION_SYSTEM
 
 logger = logging.getLogger(__name__)
 
 
+_QUALIFICATION_PROMPT = """You are an event qualification expert. Evaluate this event for sponsorship potential.
+
+Event: {event_name}
+Theme: {theme}
+Location: {city}, {country}
+Summary: {summary}
+
+Search the web for:
+- How many attendees this event typically has
+- Who the past sponsors were
+- The event's industry reputation
+
+Then score on these criteria (1-10 scale):
+- audience_relevance_score: Quality/relevance of attendees for a FinTech/Payments company
+- industry_reputation_score: Event prestige and recognition in the industry
+- attendance_score: Expected attendance size and seniority
+- sponsor_value_score: Value proposition for sponsors
+- regional_importance_score: Geographic significance for tech market
+
+Return JSON:
+{{
+  "audience_relevance_score": <float>,
+  "industry_reputation_score": <float>,
+  "attendance_score": <float>,
+  "sponsor_value_score": <float>,
+  "regional_importance_score": <float>,
+  "reasoning": "Brief justification"
+}}
+"""
+
+
 class EventQualificationAgent(BaseAgent):
     """Evaluates and scores events based on sponsorship potential.
-    
-    Scores each event on:
-    - Audience relevance (1-10)
-    - Industry reputation (1-10)
-    - Estimated attendance (1-10)
-    - Sponsor visibility (1-10)
-    - Regional importance (1-10)
-    
-    Then calculates overall_score and assigns priority_tier.
+
+    Uses LLM-driven web research to gather attendee/sponsor data, then
+    scores each event on 5 criteria and assigns a priority tier.
+    Falls back to rule-based heuristics if LLM search fails.
     """
-    
+
     name = "event_qualification"
     description = "Scores events for sponsorship potential"
-    
-    # Scoring thresholds for tier classification
+
     TIER_THRESHOLDS = {
-        "Tier 1 - Must Sponsor": 8.0,  # overall_score >= 8.0
-        "Tier 2 - Strong Opportunity": 6.0,  # >= 6.0
-        "Tier 3 - Optional": 4.0,  # >= 4.0
-        "Tier 4 - Low Priority": 0.0  # < 4.0
+        "Tier 1 - Must Sponsor": 8.0,
+        "Tier 2 - Strong Opportunity": 6.0,
+        "Tier 3 - Optional": 4.0,
+        "Tier 4 - Low Priority": 0.0
     }
-    
-    def __init__(self, provider: str = "tavily"):
-        self.search_tool = WebSearchTool(provider=provider)
-    
+
     def execute(self, input_data: AgentInput) -> AgentOutput:
-        """ify andQual score discovered events."""
         self.validate_input(input_data)
-        
-        # Get events from context
+
         events = input_data.context.get("events", [])
-        
         if not events:
             return AgentOutput(
                 agent_name=self.name,
                 findings={"events": [], "message": "No events to qualify"},
                 metadata={"agent": self.name, "event_count": 0}
             )
-        
+
         logger.info(f"Qualifying {len(events)} events")
-        
+
         qualified_events = []
-        
         for event in events:
-            qualified_event = self._qualify_event(event)
-            qualified_events.append(qualified_event)
-        
-        # Sort by overall_score descending
+            qualified_events.append(self._qualify_event(event))
+
         qualified_events.sort(
-            key=lambda x: float(x.get("overall_score") or 0), 
+            key=lambda x: float(x.get("overall_score") or 0),
             reverse=True
         )
-        
+
         logger.info(f"Qualified {len(qualified_events)} events")
-        
         return AgentOutput(
             agent_name=self.name,
             findings={"events": qualified_events},
             metadata={"agent": self.name, "event_count": len(qualified_events)}
         )
-    
+
     def _qualify_event(self, event: dict) -> dict:
-        """Qualify a single event by scoring it."""
-        event_name = event.get("event_name", "")
-        theme = event.get("theme", "")
-        country = event.get("country", "")
-        
-        # Search for event info to help score
-        scores = self._search_for_scores(event_name, theme, country)
-        
-        # Calculate individual scores (1-10 scale)
-        audience_score = self._calculate_audience_score(scores, theme)
-        reputation_score = self._calculate_reputation_score(scores, event_name)
-        attendance_score = self._calculate_attendance_score(scores)
-        sponsor_score = self._calculate_sponsor_score(scores)
-        regional_score = self._calculate_regional_score(country)
-        
-        # Calculate overall score (weighted average)
+        """Qualify a single event — try LLM first, fall back to rules."""
+        scores = self._qualify_with_llm(event)
+        if not scores:
+            scores = self._qualify_with_rules(event)
+
+        event["audience_relevance_score"] = str(scores["audience_relevance_score"])
+        event["industry_reputation_score"] = str(scores["industry_reputation_score"])
+        event["attendance_score"] = str(scores["attendance_score"])
+        event["sponsor_value_score"] = str(scores["sponsor_value_score"])
+        event["regional_importance_score"] = str(scores["regional_importance_score"])
+
         overall = (
-            audience_score * 0.25 +
-            reputation_score * 0.25 +
-            attendance_score * 0.20 +
-            sponsor_score * 0.15 +
-            regional_score * 0.15
+            scores["audience_relevance_score"] * 0.25 +
+            scores["industry_reputation_score"] * 0.25 +
+            scores["attendance_score"] * 0.20 +
+            scores["sponsor_value_score"] * 0.15 +
+            scores["regional_importance_score"] * 0.15
         )
-        
-        # Determine tier
-        tier = self._determine_tier(overall)
-        
-        # Update event with scores
-        event["audience_relevance_score"] = str(audience_score)
-        event["industry_reputation_score"] = str(reputation_score)
-        event["attendance_score"] = str(attendance_score)
-        event["sponsor_value_score"] = str(sponsor_score)
-        event["regional_importance_score"] = str(regional_score)
+
         event["overall_score"] = str(round(overall, 1))
-        event["priority_tier"] = tier
+        event["priority_tier"] = self._determine_tier(overall)
         event["status"] = "Qualified"
-        
         return event
-    
-    def _search_for_scores(self, event_name: str, theme: str, country: str) -> dict:
-        """Search for event information to help with scoring."""
-        scores = {
-            "attendee_count": "Not Found",
-            "sponsors": "Not Found",
-            "reputation": "Not Found"
-        }
-        
-        if not event_name:
-            return scores
-        
+
+    def _qualify_with_llm(self, event: dict) -> Optional[dict]:
+        """Use LLM with web research to score the event."""
         try:
-            # Search for attendee count
-            query = f"{event_name} attendees participants 2024 2025"
-            results = self.search_tool.search(query, max_results=3)
-            if results and results[0].get("content"):
-                scores["attendee_count"] = results[0]["content"][:200]
-        except (httpx.HTTPError, ConnectionError, TimeoutError):
-            pass
-        
-        return scores
-    
-    def _calculate_audience_score(self, scores: dict, theme: str) -> float:
-        """Calculate audience relevance score."""
-        # Higher score for FinTech, AI, Payments (our target industries)
-        target_industries = ["fintech", "payments", "artificial intelligence", "ai"]
-        theme_lower = theme.lower() if theme else ""
-        
-        for industry in target_industries:
-            if industry in theme_lower:
-                return 8.5
-        
-        return 6.5
-    
-    def _calculate_reputation_score(self, scores: dict, event_name: str) -> float:
-        """Calculate industry reputation score."""
-        name_lower = event_name.lower() if event_name else ""
-        
-        # Known high-reputation events get higher scores
-        high_reputation = ["world", "global", "summit", "conference", "expo"]
-        
-        for term in high_reputation:
-            if term in name_lower:
-                return 7.5
-        
-        return 6.0
-    
-    def _calculate_attendance_score(self, scores: dict) -> float:
-        """Calculate estimated attendance score."""
-        content = scores.get("attendee_count", "").lower()
-        
-        # Try to estimate from search results
-        if "thousand" in content or "5000" in content or "10000" in content:
-            return 9.0
-        elif "thousands" in content or "3000" in content:
-            return 7.5
-        elif "hundred" in content or "500" in content:
-            return 5.5
-        
-        # Default for unknown
-        return 5.0
-    
-    def _calculate_sponsor_score(self, scores: dict) -> float:
-        """Calculate sponsor visibility score."""
-        # Default score based on search presence
-        return 6.0
-    
-    def _calculate_regional_score(self, country: str) -> float:
-        """Calculate regional importance score."""
-        # Major tech hubs get higher scores
-        major_hubs = ["usa", "united states", "uk", "singapore", "dubai", "india"]
-        country_lower = country.lower() if country else ""
-        
-        for hub in major_hubs:
-            if hub in country_lower:
-                return 8.5
-        
-        # Regional hubs
-        regional_hubs = ["brazil", "saudi arabia", "riyadh", "australia", "japan"]
-        for hub in regional_hubs:
-            if hub in country_lower:
-                return 6.5
-        
-        return 5.0
-    
+            prompt = _QUALIFICATION_PROMPT.format(
+                event_name=event.get("event_name", "Unknown"),
+                theme=event.get("theme", "Unknown"),
+                city=event.get("city", "Unknown"),
+                country=event.get("country", "Unknown"),
+                summary=event.get("summary", "N/A")[:300],
+            )
+
+            response = self.llm_with_tools(
+                prompt=prompt,
+                system_message=EVENT_QUALIFICATION_SYSTEM,
+            )
+
+            if not response.success or not response.content:
+                return None
+
+            self._track_llm_usage(response)
+            data = extract_json_from_response(response.content)
+            if not data:
+                return None
+
+            return {
+                "audience_relevance_score": float(data.get("audience_relevance_score", 6.0)),
+                "industry_reputation_score": float(data.get("industry_reputation_score", 6.0)),
+                "attendance_score": float(data.get("attendance_score", 5.0)),
+                "sponsor_value_score": float(data.get("sponsor_value_score", 6.0)),
+                "regional_importance_score": float(data.get("regional_importance_score", 5.0)),
+            }
+        except Exception as e:
+            logger.debug(f"LLM qualification failed: {e}")
+            return None
+
+    def _qualify_with_rules(self, event: dict) -> dict:
+        """Rule-based fallback scoring."""
+        theme = event.get("theme", "").lower()
+        country = event.get("country", "").lower()
+        name = event.get("event_name", "").lower()
+
+        # Audience relevance
+        target = ["fintech", "payments", "artificial intelligence", "ai"]
+        audience = 8.5 if any(t in theme for t in target) else 6.5
+
+        # Reputation
+        reputation = 7.5 if any(kw in name for kw in ["world", "global", "summit", "conference", "expo"]) else 6.0
+
+        # Attendance (heuristic)
+        attendance = 5.0
+
+        # Sponsor value
+        sponsor = 6.0
+
+        # Regional importance
+        major = ["usa", "united states", "uk", "singapore", "dubai", "india"]
+        regional = ["brazil", "saudi arabia", "riyadh", "australia", "japan"]
+        if any(h in country for h in major):
+            region_score = 8.5
+        elif any(h in country for h in regional):
+            region_score = 6.5
+        else:
+            region_score = 5.0
+
+        return {
+            "audience_relevance_score": audience,
+            "industry_reputation_score": reputation,
+            "attendance_score": attendance,
+            "sponsor_value_score": sponsor,
+            "regional_importance_score": region_score,
+        }
+
     def _determine_tier(self, overall_score: float) -> str:
-        """Determine priority tier based on overall score."""
         if overall_score >= 8.0:
             return "Tier 1 - Must Sponsor"
         elif overall_score >= 6.0:

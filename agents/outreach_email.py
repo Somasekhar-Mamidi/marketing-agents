@@ -1,6 +1,7 @@
 """Outreach Email Agent - Generates professional sponsorship outreach emails."""
 
 import logging
+from typing import Optional
 from agents.base import BaseAgent, AgentInput, AgentOutput
 from config.company_config import get_company_config
 
@@ -14,6 +15,7 @@ class OutreachEmailAgent(BaseAgent):
     description = "Generates sponsorship outreach emails"
     
     def __init__(self):
+        super().__init__()
         self.config = get_company_config()
     
     def execute(self, input_data: AgentInput) -> AgentOutput:
@@ -49,51 +51,77 @@ class OutreachEmailAgent(BaseAgent):
     
     def _generate_outreach(self, event: dict) -> dict:
         """Generate outreach email for a single event."""
-        event_name = event.get("event_name", "the event")
-        organizer = event.get("organizer", "the organizer")
-        theme = event.get("theme", "technology")
-        tier = event.get("priority_tier", "")
+        llm_email = self._generate_with_llm(event)
+        if llm_email:
+            event["outreach_subject"] = llm_email["subject"]
+            event["outreach_email"] = llm_email["body"]
+        else:
+            event["outreach_subject"] = self._generate_subject_fallback(event)
+            event["outreach_email"] = self._generate_body_fallback(event)
         
-        subject = self._generate_subject(event_name, theme, tier)
-        body = self._generate_email_body(event_name, theme, organizer, tier)
-        
-        event["outreach_subject"] = subject
-        event["outreach_email"] = body
         event["status"] = "Outreach Ready"
-        
         return event
     
-    def _generate_subject(self, event_name: str, theme: str, tier: str) -> str:
-        """Generate professional subject line."""
-        tier_indicator = "Partnership Inquiry" if "Tier 1" in tier else "Sponsorship Opportunity"
-        return f"{self.config.name} - {tier_indicator}: {event_name}"
+    def _generate_with_llm(self, event: dict) -> Optional[dict]:
+        try:
+            from utils.llm_helpers import llm_call_with_json_output, OUTREACH_EMAIL_SYSTEM
+            
+            contact_name = self.config.contact_name or "[Your Name]"
+            company_name = self.config.name
+            
+            prompt = f"""
+            Generate a personalized sponsorship outreach email for this event:
+            
+            Event: {event.get('event_name', 'Unknown')}
+            Organizer: {event.get('organizer', 'Event Team')}
+            Theme: {event.get('theme', 'Technology')}
+            Priority: {event.get('priority_tier', 'Standard')}
+            Strategic Value: {event.get('strategic_value', 'Industry event')[:200]}
+            
+            Sender: {contact_name} from {company_name}
+            
+            Return JSON with:
+            - subject: Compelling subject line (under 60 characters)
+            - body: Professional email body (100-150 words)
+            
+            The email should:
+            1. Show genuine interest in the event
+            2. Mention why we're a good fit
+            3. Request sponsorship information
+            4. Include a clear call-to-action
+            """
+            
+            result = llm_call_with_json_output(
+                llm_func=self.llm,
+                prompt=prompt,
+                system_message=OUTREACH_EMAIL_SYSTEM,
+                max_retries=1
+            )
+            
+            if not result:
+                return None
+            
+            return {
+                "subject": result.get("subject", f"Sponsorship Opportunity: {event.get('event_name', 'Event')}"),
+                "body": result.get("body", "")
+            }
+            
+        except Exception as e:
+            logger.debug(f"LLM email generation failed: {e}")
+            return None
     
-    def _generate_email_body(self, event_name: str, theme: str, organizer: str, tier: str) -> str:
-        """Generate concise email body (under 120 words)."""
+    def _generate_subject_fallback(self, event: dict) -> str:
+        tier = event.get("priority_tier", "")
+        tier_indicator = "Partnership" if "Tier 1" in tier else "Sponsorship"
+        return f"{self.config.name} - {tier_indicator}: {event.get('event_name', 'Event')}"
+    
+    def _generate_body_fallback(self, event: dict) -> str:
         contact_name = self.config.contact_name or "[Your Name]"
-        contact_title = self.config.contact_title or "[Your Title]"
+        event_name = event.get("event_name", "the event")
+        organizer = event.get("organizer", "Team")
+        theme = event.get("theme", "technology")
         
-        body = f"""Dear {organizer if organizer else 'Team'},
-
-I hope this email finds you well. My name is {contact_name} from {self.config.name}, a leader in {theme.title()} solutions.
-
-We are interested in sponsoring {event_name} and would love to learn more about available sponsorship opportunities.
-
-Specifically, we'd like to understand:
-- Sponsorship tiers and benefits
-- Available branding opportunities
-- Expected attendee demographics
-
-Would you be available for a brief 15-minute call this week to discuss? We're excited about the possibility of partnering with you.
-
-Best regards,
-{contact_name}
-{contact_title}
-{self.config.name}"""
-        
-        word_count = len(body.split())
-        if word_count > 120:
-            body = f"""Dear {organizer if organizer else 'Team'},
+        return f"""Dear {organizer},
 
 I'm {contact_name} from {self.config.name}, a {theme.title()} solutions provider.
 
@@ -106,5 +134,3 @@ I'd welcome a quick call to discuss. Please let me know your availability.
 Best regards,
 {contact_name}
 {self.config.name}"""
-        
-        return body

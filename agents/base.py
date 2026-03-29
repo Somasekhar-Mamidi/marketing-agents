@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional, Callable, Dict
 from pydantic import BaseModel, Field
 
-from utils.configurable_llm_client import LLMResponse, get_llm_client_for_agent
+from utils.configurable_llm_client import LLMResponse, get_llm_client_for_agent, get_llm_with_tools_for_agent
 
 
 class AgentInput(BaseModel):
@@ -33,6 +33,7 @@ class BaseAgent(ABC):
     def __init__(self):
         """Initialize agent with LLM client."""
         self._llm_complete: Optional[Callable[..., LLMResponse]] = None
+        self._llm_with_tools_complete: Optional[Callable[..., LLMResponse]] = None
         self._llm_usage_stats: list = []
         self._progress_callback: Optional[Callable[[int, str], None]] = None
 
@@ -56,10 +57,23 @@ class BaseAgent(ABC):
     
     @property
     def llm(self) -> Callable[..., LLMResponse]:
-        """Get LLM completion function for this agent."""
+        """Get LLM completion function for this agent (plain, no tools)."""
         if self._llm_complete is None:
             self._llm_complete = get_llm_client_for_agent(self.name)
         return self._llm_complete
+
+    @property
+    def llm_with_tools(self) -> Callable[..., LLMResponse]:
+        """Get strategy-aware LLM function (native web / tool calling / hybrid).
+
+        Routes through the agent's configured strategy in models.yaml:
+        - Gemini models use native web search.
+        - GLM/Kimi models use tool calling (web_search, web_fetch).
+        - Hybrid tries native first, falls back to tool calling.
+        """
+        if self._llm_with_tools_complete is None:
+            self._llm_with_tools_complete = get_llm_with_tools_for_agent(self.name)
+        return self._llm_with_tools_complete
     
     def get_model_info(self) -> Dict[str, Any]:
         """Get model configuration for this agent."""

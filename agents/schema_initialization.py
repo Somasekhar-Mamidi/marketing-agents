@@ -36,6 +36,7 @@ class SchemaInitializationAgent(BaseAgent):
     
     def __init__(self) -> None:
         """Initialize the schema initialization agent."""
+        super().__init__()
         self.schema = get_empty_schema()
     
     def execute(self, input_data: AgentInput) -> AgentOutput:

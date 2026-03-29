@@ -740,6 +740,7 @@ async def _run_vendor_pipeline(pipeline_id: str, request: PipelineStartRequest, 
 
 async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, run: dict):
     """Run standard event-focused pipeline."""
+    import asyncio
     try:
         # Step 1: Intent Understanding
         run["current_agent"] = "intent_understanding"
@@ -755,6 +756,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         intent_output = intent_agent.execute(intent_input)
         _store_agent_output(run, "intent_understanding", intent_output)
         intent_data = intent_output.findings.get("intent", {})
+        await asyncio.sleep(0.1)  # yield for SSE polling
         
         logger.info(f"Intent understood with {intent_data.get('confidence', 0)}% confidence")
         
@@ -775,6 +777,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         discovery_output = discovery_agent.execute(discovery_input)
         _store_agent_output(run, "event_discovery", discovery_output)
         events = discovery_output.findings.get("events", [])
+        await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Save events
         for event in events:
@@ -783,28 +786,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         
         run["events_count"] = len(events)
         run["progress_percent"] = 25
-        
-        if request.enable_checkpoints and events:
-            checkpoint = checkpoint_mgr.create_checkpoint(
-                pipeline_id=pipeline_id,
-                checkpoint_type=CheckpointType.EVENT_REVIEW,
-                name="Review Discovered Events",
-                data={"events": events}
-            )
-            checkpoint_id = checkpoint.id
-            
-            if request.auto_approve:
-                checkpoint_mgr.approve_checkpoint(checkpoint_id, "auto", "Auto-approved")
-            else:
-                # Wait for approval
-                run["status"] = "waiting_for_approval"
-                run["checkpoint_id"] = checkpoint_id
-                approved = checkpoint_mgr.wait_for_approval(checkpoint_id, poll_interval=5)
-                if not approved:
-                    run["status"] = "rejected"
-                    return
-                run["status"] = "running"
-        
+
         # Step 3: Event Qualification
         run["current_agent"] = "event_qualification"
         run["progress_percent"] = 35
@@ -819,6 +801,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             qualification_output = qualification_agent.execute(qualification_input)
             _store_agent_output(run, "event_qualification", qualification_output)
             qualified_events = qualification_output.findings.get("scored_events", events)
+        await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Step 4: Vendor Discovery (for service providers like booth builders)
         run["current_agent"] = "vendor_discovery"
@@ -859,6 +842,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         for vendor in vendors:
             if db:
                 db.save_vendor(vendor)
+        await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Step 5: Website Scraping (for events)
         run["current_agent"] = "event_website_scraper"
@@ -873,6 +857,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             scraper_output = scraper_agent.execute(scraper_input)
             _store_agent_output(run, "event_website_scraper", scraper_output)
             scraped_events = scraper_output.findings.get("events", qualified_events)
+        await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Step 6: Event Intelligence
         run["current_agent"] = "event_intelligence"
@@ -886,6 +871,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             )
             intel_output = intelligence_agent.execute(intel_input)
             _store_agent_output(run, "event_intelligence", intel_output)
+        await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Step 7: Event Prioritization
         run["current_agent"] = "event_prioritization"
@@ -900,6 +886,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             priority_output = prioritization_agent.execute(priority_input)
             _store_agent_output(run, "event_prioritization", priority_output)
             prioritized_events = priority_output.findings.get("prioritized_events", qualified_events)
+        await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Step 8: Outreach Email
         run["current_agent"] = "outreach_email"
@@ -916,11 +903,37 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             )
             email_output = email_agent.execute(email_input)
             _store_agent_output(run, "outreach_email", email_output)
+        await asyncio.sleep(0.1)  # yield for SSE polling
         
+        # Final checkpoint: review all results before completing
+        if request.enable_checkpoints:
+            checkpoint = checkpoint_mgr.create_checkpoint(
+                pipeline_id=pipeline_id,
+                checkpoint_type=CheckpointType.EVENT_REVIEW,
+                name="Review Final Pipeline Results",
+                data={
+                    "events": qualified_events if qualified_events else events,
+                    "vendors": vendors,
+                }
+            )
+            checkpoint_id = checkpoint.id
+
+            if request.auto_approve:
+                checkpoint_mgr.approve_checkpoint(checkpoint_id, "auto", "Auto-approved")
+            else:
+                run["status"] = "waiting_for_approval"
+                run["checkpoint_id"] = checkpoint_id
+                run["progress_percent"] = 98
+                approved = checkpoint_mgr.wait_for_approval(checkpoint_id, poll_interval=5)
+                if not approved:
+                    run["status"] = "rejected"
+                    return
+                run["status"] = "running"
+
         run["progress_percent"] = 100
         run["status"] = "completed"
         run["completed_at"] = datetime.utcnow().isoformat()
-        
+
         logger.info(f"Pipeline completed: {pipeline_id}")
     
     except Exception as e:
@@ -1160,14 +1173,14 @@ async def stream_pipeline_updates(pipeline_id: str):
                     "events_count": run.get("events_count", 0),
                     "vendors_count": run.get("vendors_count", 0),
                 }
-                yield f"data: {json.dumps(data)}\n\n"
+                yield f"data: {json.dumps(data, default=str)}\n\n"
             
             # Detect newly completed agents and stream their outputs
             completed_agents = run.get("completed_agents", [])
             newly_completed = [a for a in completed_agents if a not in last_completed_agents]
             for agent in newly_completed:
-                yield f"data: {json.dumps({'type': 'agent_complete', 'pipeline_id': pipeline_id, 'completed_agent': agent, 'agent_output': run.get('agent_outputs', {}).get(agent, {})})}\n\n"
-            last_completed_agents = completed_agents
+                yield f"data: {json.dumps({'type': 'agent_complete', 'pipeline_id': pipeline_id, 'completed_agent': agent, 'agent_output': run.get('agent_outputs', {}).get(agent, {})}, default=str)}\n\n"
+            last_completed_agents = list(completed_agents)
             
             # If pipeline finished, emit final aggregated outputs and exit
             if current_status in ["completed", "failed", "cancelled"]:
@@ -1176,10 +1189,10 @@ async def stream_pipeline_updates(pipeline_id: str):
                     'status': current_status,
                     'agent_outputs': run.get('agent_outputs', {})
                 }
-                yield f"data: {json.dumps(final_payload)}\n\n"
+                yield f"data: {json.dumps(final_payload, default=str)}\n\n"
                 break
             
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)  # Poll every 1s for smoother updates
     
     return StreamingResponse(
         event_generator(),

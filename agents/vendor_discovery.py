@@ -2,384 +2,281 @@
 
 import logging
 from typing import List, Dict, Optional
+from urllib.parse import urlparse
 from agents.base import BaseAgent, AgentInput, AgentOutput
-from utils.search import WebSearchTool
+from utils.llm_helpers import extract_json_from_response, VENDOR_DISCOVERY_SYSTEM
 
 logger = logging.getLogger(__name__)
 
 
+_VENDOR_SEARCH_PROMPT = """You are a vendor research specialist. Find real service providers, sponsors, and exhibitors.
+
+Search the web for current information. For each vendor found, return:
+{{
+  "vendor_name": "Company name",
+  "vendor_website": "Official URL",
+  "vendor_type": "sponsor|exhibitor|service_provider",
+  "service_category": "Category of service",
+  "relevance_score": 0.0-1.0,
+  "description": "Brief description of services"
+}}
+
+Return ONLY a JSON object: {{"vendors": [...]}}
+
+IMPORTANT:
+- Only include REAL companies with working websites
+- Prioritize vendors with recent activity (2024-2025)
+- Include contact information if found
+"""
+
+
 class VendorDiscoveryAgent(BaseAgent):
-    """Discovers vendors (sponsors, exhibitors, partners, service providers) for events.
-    
-    Searches for:
-    - Past sponsors from previous editions
-    - Current sponsors/exhibitors
-    - Potential vendor contacts
-    - Event service providers (booth builders, contractors, etc.)
+    """Discovers vendors using LLM-driven web search.
+
+    Uses Gemini native search or GLM/Kimi tool calling to find sponsors,
+    exhibitors, and service providers. Falls back to DuckDuckGo if LLM fails.
     """
-    
+
     name = "vendor_discovery"
     description = "Discovers vendors, sponsors, and service providers for events"
-    
+
     VENDOR_TYPES = ['sponsor', 'exhibitor', 'partner', 'speaker', 'service_provider']
-    
-    # Service provider categories for event support
+
     SERVICE_CATEGORIES = {
-        'booth_builder': ['booth builder', 'exhibition stand', 'stand contractor', 'exhibition design', 'trade show booth'],
-        'av_equipment': ['av equipment', 'audio visual', 'stage design', 'lighting', 'sound system'],
-        'catering': ['catering', 'food service', 'event catering', 'hospitality'],
-        'printing': ['event printing', 'banner printing', 'signage', 'promotional materials'],
-        'logistics': ['event logistics', 'freight', 'shipping', 'storage', 'installation'],
-        'marketing': ['event marketing', 'promotion', 'social media', 'pr agency'],
-        'technology': ['event technology', 'registration system', 'event app', 'virtual platform'],
-        'security': ['event security', 'crowd management', 'safety'],
-        'staffing': ['event staffing', 'hostess', 'promotional staff', 'interpreters'],
-        'transportation': ['transportation', 'shuttle service', 'vip transport'],
-        'venue': ['venue', 'conference center', 'exhibition hall', 'hotel venue'],
-        'photography': ['event photography', 'videography', 'live streaming'],
-        'furniture': ['event furniture', 'rental furniture', 'booth furniture', 'display fixtures'],
-        'floral': ['event floral', 'decoration', 'staging', 'theme design']
+        'booth_builder': ['booth builder', 'exhibition stand', 'stand contractor'],
+        'av_equipment': ['av equipment', 'audio visual', 'stage design'],
+        'catering': ['catering', 'food service', 'event catering'],
+        'printing': ['event printing', 'banner printing', 'signage'],
+        'logistics': ['event logistics', 'freight', 'shipping'],
+        'marketing': ['event marketing', 'promotion', 'pr agency'],
+        'technology': ['event technology', 'registration system', 'event app'],
+        'security': ['event security', 'crowd management'],
+        'staffing': ['event staffing', 'hostess', 'promotional staff'],
+        'transportation': ['transportation', 'shuttle service'],
+        'venue': ['venue', 'conference center'],
+        'photography': ['event photography', 'videography'],
+        'furniture': ['event furniture', 'rental furniture'],
+        'floral': ['event floral', 'decoration', 'staging']
     }
-    
+
     def __init__(self, max_vendors_per_event: int = 10, search_service_providers: bool = True):
-        self.search_tool = WebSearchTool(provider="auto")
+        super().__init__()
         self.max_vendors_per_event = max_vendors_per_event
         self.search_service_providers = search_service_providers
-    
+
     def execute(self, input_data: AgentInput) -> AgentOutput:
-        """Discover vendors for events."""
         self.validate_input(input_data)
-        
+
         events = input_data.context.get("events", [])
-        
-        # Check if specific service provider search is requested
-        service_category = input_data.parameters.get('service_category', None)
-        location = input_data.parameters.get('location', None)
-        
+        service_category = input_data.parameters.get('service_category')
+        location = input_data.parameters.get('location')
+
+        # Direct service provider search (no events needed)
         if not events and service_category and location:
-            # Direct service provider search (no events)
-            vendors = self._search_service_providers_directly(service_category, location)
+            vendors = self._search_service_providers_llm(service_category, location)
             return AgentOutput(
                 agent_name=self.name,
-                findings={
-                    "vendors": vendors,
-                    "service_category": service_category,
-                    "location": location
-                },
-                metadata={
-                    "agent": self.name,
-                    "vendor_count": len(vendors),
-                    "search_type": "direct_service_provider"
-                }
+                findings={"vendors": vendors, "service_category": service_category, "location": location},
+                metadata={"agent": self.name, "vendor_count": len(vendors), "search_type": "direct_service_provider"}
             )
-        
+
         if not events:
             return AgentOutput(
                 agent_name=self.name,
                 findings={"vendors": [], "message": "No events to process"},
                 metadata={"agent": self.name, "vendor_count": 0}
             )
-        
+
         logger.info(f"Discovering vendors for {len(events)} events")
-        
         all_vendors = []
-        
+
         for event in events:
-            # Search for traditional vendors (sponsors/exhibitors)
-            event_vendors = self._discover_vendors_for_event(event)
+            event_vendors = self._discover_for_event_llm(event)
+            for v in event_vendors:
+                v['event_id'] = event.get('id')
+                v['event_name'] = event.get('event_name')
             all_vendors.extend(event_vendors)
-            
-            # Link vendors to event
-            for vendor in event_vendors:
-                vendor['event_id'] = event.get('id')
-                vendor['event_name'] = event.get('event_name')
-            
-            # Search for service providers if enabled
-            if self.search_service_providers:
-                location = event.get('city', '') + ' ' + event.get('country', '')
-                if location.strip():
-                    service_providers = self._search_service_providers_for_event(
-                        event.get('event_name', ''), 
-                        location.strip(),
-                        service_category
-                    )
-                    all_vendors.extend(service_providers)
-        
+
+        all_vendors = self._deduplicate_vendors(all_vendors)
         logger.info(f"Discovered {len(all_vendors)} total vendors")
-        
+
         return AgentOutput(
             agent_name=self.name,
-            findings={
-                "vendors": all_vendors,
-                "events": events
-            },
-            metadata={
-                "agent": self.name,
-                "vendor_count": len(all_vendors),
-                "events_processed": len(events)
-            }
+            findings={"vendors": all_vendors, "events": events},
+            metadata={"agent": self.name, "vendor_count": len(all_vendors), "events_processed": len(events)}
         )
-    
-    def _search_service_providers_directly(self, category: str, location: str) -> List[Dict]:
-        """Search for service providers directly by category and location.
-        
-        Args:
-            category: Service category (e.g., 'booth_builder', 'catering')
-            location: Location (e.g., 'Dublin, Ireland')
-            
-        Returns:
-            List of vendor dictionaries
-        """
-        keywords = self.SERVICE_CATEGORIES.get(category, [category])
-        vendors = []
-        
-        for keyword in keywords[:2]:  # Use top 2 keywords
-            queries = [
-                f"{keyword} {location}",
-                f"{keyword} companies {location}",
-                f"best {keyword} {location}",
-                f"{keyword} services {location}"
-            ]
-            
-            for query in queries:
-                try:
-                    results = self.search_tool.search(query, max_results=5)
-                    for result in results:
-                        vendor = self._parse_service_provider_result(result, category)
-                        if vendor and not self._is_duplicate_vendor(vendor, vendors):
-                            vendors.append(vendor)
-                            
-                    if len(vendors) >= self.max_vendors_per_event * 2:
-                        break
-                        
-                except Exception as e:
-                    logger.error(f"Error searching service providers: {e}")
-                    continue
-            
-            if len(vendors) >= self.max_vendors_per_event * 2:
-                break
-        
-        return vendors[:self.max_vendors_per_event * 2]
-    
-    def _search_service_providers_for_event(self, event_name: str, location: str, specific_category: Optional[str] = None) -> List[Dict]:
-        """Search for service providers for a specific event.
-        
-        Args:
-            event_name: Name of the event
-            location: Event location
-            specific_category: Optional specific category to search for
-            
-        Returns:
-            List of vendor dictionaries
-        """
-        vendors = []
-        
-        # Determine which categories to search
-        if specific_category and specific_category in self.SERVICE_CATEGORIES:
-            categories = {specific_category: self.SERVICE_CATEGORIES[specific_category]}
-        else:
-            # Search for booth builders and key service providers by default
-            categories = {
-                'booth_builder': self.SERVICE_CATEGORIES['booth_builder'],
-                'av_equipment': self.SERVICE_CATEGORIES['av_equipment'],
-                'printing': self.SERVICE_CATEGORIES['printing']
-            }
-        
-        for category, keywords in categories.items():
-            for keyword in keywords[:2]:
-                query = f"{keyword} {location}"
-                
-                try:
-                    results = self.search_tool.search(query, max_results=3)
-                    for result in results:
-                        vendor = self._parse_service_provider_result(result, category)
-                        if vendor and not self._is_duplicate_vendor(vendor, vendors):
-                            vendor['event_name'] = event_name
-                            vendor['vendor_type'] = 'service_provider'
-                            vendor['service_category'] = category
-                            vendors.append(vendor)
-                            
-                except Exception as e:
-                    logger.error(f"Error searching {category}: {e}")
-                    continue
-                
-                if len(vendors) >= self.max_vendors_per_event:
-                    break
-            
-            if len(vendors) >= self.max_vendors_per_event:
-                break
-        
-        return vendors[:self.max_vendors_per_event]
-    
-    def _parse_service_provider_result(self, result: Dict, category: str) -> Optional[Dict]:
-        """Parse a search result into a service provider vendor dict.
-        
-        Args:
-            result: Search result dict with 'title', 'url', 'content'
-            category: Service category
-            
-        Returns:
-            Vendor dict or None if parsing fails
-        """
-        title = result.get('title', '')
-        url = result.get('url', '')
-        content = result.get('content', '')
-        
-        if not title or not url:
-            return None
-        
-        # Extract company name from title
-        company_name = title.split('|')[0].split('-')[0].strip()
-        company_name = company_name.split(':')[0].strip()
-        
-        # Clean up common suffixes
-        suffixes = ['Home', 'Contact', 'About', 'Services', 'Ltd', 'Limited']
-        for suffix in suffixes:
-            if company_name.endswith(f' {suffix}'):
-                company_name = company_name[:-len(suffix)-1].strip()
-        
-        return {
-            'vendor_name': company_name,
-            'vendor_website': url,
-            'vendor_type': 'service_provider',
-            'service_category': category,
-            'source': 'search',
-            'relevance_score': result.get('score', 0.5),
-            'description': content[:200] if content else '',
-            'contact_email': None,
-            'contact_phone': None
-        }
-    
-    def _is_duplicate_vendor(self, vendor: Dict, existing_vendors: List[Dict]) -> bool:
-        """Check if vendor is already in list.
-        
-        Args:
-            vendor: New vendor to check
-            existing_vendors: List of existing vendors
-            
-        Returns:
-            True if duplicate found
-        """
-        vendor_name = vendor.get('vendor_name', '').lower()
-        vendor_url = vendor.get('vendor_website', '').lower()
-        
-        for existing in existing_vendors:
-            existing_name = existing.get('vendor_name', '').lower()
-            existing_url = existing.get('vendor_website', '').lower()
-            
-            # Check name similarity
-            if vendor_name == existing_name:
-                return True
-            
-            # Check URL similarity (normalize URLs)
-            if vendor_url and existing_url:
-                # Extract domain
-                from urllib.parse import urlparse
-                vendor_domain = urlparse(vendor_url).netloc.replace('www.', '')
-                existing_domain = urlparse(existing_url).netloc.replace('www.', '')
-                if vendor_domain == existing_domain:
-                    return True
-        
-        return False
-    
-    def _discover_vendors_for_event(self, event: Dict) -> List[Dict]:
-        """Discover vendors (sponsors/exhibitors) for a specific event."""
+
+    # --- LLM-driven search methods ---
+
+    def _discover_for_event_llm(self, event: dict) -> List[Dict]:
+        """Use LLM to find sponsors and exhibitors for an event."""
         event_name = event.get('event_name', '')
         if not event_name:
             return []
-        
-        vendors = []
-        
-        # Search for sponsors
-        sponsors = self._search_current_sponsors(event_name)
-        vendors.extend(sponsors)
-        
-        # Search for exhibitors
-        exhibitors = self._search_exhibitors(event_name)
-        vendors.extend(exhibitors)
-        
-        return vendors
-    
-    def _search_current_sponsors(self, event_name: str) -> List[Dict]:
-        """Search for current sponsors."""
-        query = f"{event_name} 2025 sponsors partners"
-        
+
+        location = f"{event.get('city', '')} {event.get('country', '')}".strip()
+
+        prompt = (
+            f"Find sponsors, exhibitors, and service providers for the event: {event_name}\n"
+            f"Location: {location or 'Unknown'}\n\n"
+            f"Search the web for:\n"
+            f"1. Current and past sponsors of {event_name} (2024-2025)\n"
+            f"2. Exhibitors at {event_name}\n"
+        )
+        if self.search_service_providers and location:
+            prompt += (
+                f"3. Booth builders and exhibition stand contractors in {location}\n"
+                f"4. AV equipment and event service providers in {location}\n"
+            )
+        prompt += f"\nReturn up to {self.max_vendors_per_event} vendors as JSON: {{\"vendors\": [...]}}"
+
+        vendors = self._call_llm_for_vendors(prompt)
+        if not vendors:
+            return self._fallback_vendor_search(event_name)
+        return vendors[:self.max_vendors_per_event]
+
+    def _search_service_providers_llm(self, category: str, location: str) -> List[Dict]:
+        """Use LLM to find service providers by category and location."""
+        keywords = self.SERVICE_CATEGORIES.get(category, [category])
+        keyword_str = ", ".join(keywords[:3])
+
+        prompt = (
+            f"Find {keyword_str} companies and service providers in {location}.\n\n"
+            f"Search for real companies that provide {category.replace('_', ' ')} services "
+            f"for events and exhibitions in {location}.\n\n"
+            f"Return up to {self.max_vendors_per_event * 2} vendors as JSON: {{\"vendors\": [...]}}"
+        )
+
+        vendors = self._call_llm_for_vendors(prompt)
+        if not vendors:
+            return self._fallback_service_search(category, location)
+
+        for v in vendors:
+            v['service_category'] = category
+        return vendors[:self.max_vendors_per_event * 2]
+
+    def _call_llm_for_vendors(self, prompt: str) -> List[Dict]:
+        """Call LLM with tools and parse vendor results."""
         try:
-            results = self.search_tool.search(query, max_results=5)
+            response = self.llm_with_tools(
+                prompt=prompt,
+                system_message=_VENDOR_SEARCH_PROMPT,
+            )
+
+            if not response.success or not response.content:
+                logger.warning(f"LLM vendor search failed: {response.error}")
+                return []
+
+            self._track_llm_usage(response)
+            data = extract_json_from_response(response.content)
+            if not data:
+                return []
+
+            raw_vendors = data.get("vendors", []) if isinstance(data, dict) else data
+            if not isinstance(raw_vendors, list):
+                return []
+
             vendors = []
-            
-            for result in results:
-                vendor = self._extract_vendor_from_result(result, 'sponsor')
-                if vendor:
-                    vendors.append(vendor)
-            
+            for raw in raw_vendors:
+                if not isinstance(raw, dict):
+                    continue
+                v = self._normalize_vendor(raw)
+                if v:
+                    vendors.append(v)
             return vendors
+
         except Exception as e:
-            logger.warning(f"Failed to search current sponsors for {event_name}: {e}")
+            logger.warning(f"LLM vendor search error: {e}")
             return []
-    
-    def _search_exhibitors(self, event_name: str) -> List[Dict]:
-        """Search for exhibitors."""
-        query = f"{event_name} exhibitors 2025"
-        
-        try:
-            results = self.search_tool.search(query, max_results=5)
-            vendors = []
-            
-            for result in results:
-                vendor = self._extract_vendor_from_result(result, 'exhibitor')
-                if vendor:
-                    vendors.append(vendor)
-            
-            return vendors
-        except Exception as e:
-            logger.warning(f"Failed to search exhibitors for {event_name}: {e}")
-            return []
-    
-    def _extract_vendor_from_result(self, result: Dict, vendor_type: str) -> Optional[Dict]:
-        """Extract vendor information from search result."""
-        title = result.get('title', '')
-        url = result.get('url', '')
-        content = result.get('content', '')
-        
-        # Basic extraction - in production, use NLP/LLM
-        # For now, extract company names from title
-        vendor_name = self._extract_company_name(title)
-        
-        if not vendor_name:
+
+    def _normalize_vendor(self, raw: dict) -> Optional[Dict]:
+        """Normalize a vendor dict from LLM response."""
+        name = raw.get("vendor_name", "").strip()
+        if not name:
             return None
-        
         return {
-            'vendor_name': vendor_name,
-            'vendor_type': vendor_type,
-            'vendor_website': url,
-            'source': title,
-            'relevance_score': 0,  # To be calculated by profiling agent
-            'status': 'identified'
+            'vendor_name': name,
+            'vendor_website': raw.get("vendor_website", raw.get("url", "")),
+            'vendor_type': raw.get("vendor_type", "service_provider"),
+            'service_category': raw.get("service_category", ""),
+            'source': 'llm_search',
+            'relevance_score': float(raw.get("relevance_score", 0.5)),
+            'description': raw.get("description", ""),
+            'contact_email': raw.get("contact_email"),
+            'contact_phone': raw.get("contact_phone"),
         }
-    
-    def _extract_company_name(self, text: str) -> Optional[str]:
-        """Extract company name from text."""
-        # Remove common suffixes/prefixes
-        clean = text.replace('Sponsored by', '').replace('Partner:', '')
-        clean = clean.replace('Exhibitor:', '').replace('|', ' ')
-        
-        # Take first reasonable segment
-        parts = clean.split()
-        if len(parts) >= 2:
-            return ' '.join(parts[:3])  # First 2-3 words
-        
-        return None
-    
+
+    # --- Fallback: DuckDuckGo ---
+
+    def _fallback_vendor_search(self, event_name: str) -> List[Dict]:
+        """Fallback to DuckDuckGo if LLM search fails."""
+        from utils.search import WebSearchTool
+        search_tool = WebSearchTool(provider="duckduckgo")
+        vendors = []
+
+        for query in [f"{event_name} 2025 sponsors partners", f"{event_name} exhibitors 2025"]:
+            try:
+                results = search_tool.search(query, max_results=5)
+                for r in results:
+                    name = r.get("title", "").split("|")[0].split("-")[0].strip()
+                    if name:
+                        vendors.append({
+                            'vendor_name': name,
+                            'vendor_website': r.get("url", ""),
+                            'vendor_type': 'sponsor',
+                            'source': 'duckduckgo_fallback',
+                            'relevance_score': 0.5,
+                            'description': r.get("content", "")[:200],
+                        })
+            except Exception as e:
+                logger.warning(f"Fallback vendor search failed: {e}")
+
+        return self._deduplicate_vendors(vendors)[:self.max_vendors_per_event]
+
+    def _fallback_service_search(self, category: str, location: str) -> List[Dict]:
+        from utils.search import WebSearchTool
+        search_tool = WebSearchTool(provider="duckduckgo")
+        keywords = self.SERVICE_CATEGORIES.get(category, [category])
+        vendors = []
+
+        for kw in keywords[:2]:
+            try:
+                results = search_tool.search(f"{kw} {location}", max_results=5)
+                for r in results:
+                    name = r.get("title", "").split("|")[0].split("-")[0].strip()
+                    if name:
+                        vendors.append({
+                            'vendor_name': name,
+                            'vendor_website': r.get("url", ""),
+                            'vendor_type': 'service_provider',
+                            'service_category': category,
+                            'source': 'duckduckgo_fallback',
+                            'relevance_score': 0.5,
+                            'description': r.get("content", "")[:200],
+                        })
+            except Exception as e:
+                logger.warning(f"Fallback service search failed: {e}")
+
+        return self._deduplicate_vendors(vendors)
+
+    # --- Deduplication ---
+
     def _deduplicate_vendors(self, vendors: List[Dict]) -> List[Dict]:
-        """Remove duplicate vendors."""
-        seen = set()
+        seen_names = set()
+        seen_domains = set()
         unique = []
-        
-        for vendor in vendors:
-            name = vendor.get('vendor_name', '').lower().strip()
-            if name and name not in seen:
-                seen.add(name)
-                unique.append(vendor)
-        
+        for v in vendors:
+            name = v.get('vendor_name', '').lower().strip()
+            url = v.get('vendor_website', '')
+            domain = urlparse(url).netloc.replace('www.', '') if url else ""
+
+            if name in seen_names:
+                continue
+            if domain and domain in seen_domains:
+                continue
+
+            seen_names.add(name)
+            if domain:
+                seen_domains.add(domain)
+            unique.append(v)
         return unique

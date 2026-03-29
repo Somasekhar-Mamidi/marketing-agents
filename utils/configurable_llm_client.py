@@ -523,6 +523,117 @@ class ConfigurableLLMClient:
         
         return result
     
+    def _get_agent_strategy(self, agent_name: str) -> str:
+        """Get the execution strategy for an agent from config.
+
+        Returns one of: native_web_access, tool_calling, tool_based,
+        hybrid, reasoning_only, writing_only, formatting_only, json_only.
+        """
+        agent_models = self.config.get("llm", {}).get("agent_models", {})
+        agent_config = agent_models.get(agent_name, {})
+        return agent_config.get("strategy", "reasoning_only")
+
+    def _get_fallback_model_config(self, agent_name: str) -> Optional[ModelConfig]:
+        """Get fallback model config for hybrid-strategy agents."""
+        agent_models = self.config.get("llm", {}).get("agent_models", {})
+        agent_config = agent_models.get(agent_name, {})
+        fallback = agent_config.get("fallback")
+        if not fallback:
+            return None
+
+        defaults = self.config.get("llm", {}).get("defaults", {})
+        provider_name = fallback.get("provider", agent_config.get("provider", defaults.get("provider", "grid_ai")))
+        model_id = fallback.get("model")
+        if not model_id:
+            return None
+
+        provider_config = self.config.get("llm", {}).get("providers", {}).get(provider_name, {})
+        api_key_env = provider_config.get("api_key_env", f"{provider_name.upper()}_API_KEY")
+        model_capabilities = self._get_model_capabilities(provider_name, model_id)
+
+        return ModelConfig(
+            model_id=model_id,
+            provider=provider_name,
+            temperature=agent_config.get("temperature", defaults.get("temperature", 0.3)),
+            max_tokens=agent_config.get("max_tokens", defaults.get("max_tokens", 2000)),
+            timeout_seconds=agent_config.get("timeout_seconds", defaults.get("timeout_seconds", 60)),
+            base_url=provider_config.get("base_url"),
+            api_key=get_env_var(api_key_env),
+            supports_json=model_capabilities.get("supports_json", True),
+            supports_vision=model_capabilities.get("supports_vision", False),
+            supports_search=model_capabilities.get("supports_search", False),
+        )
+
+    def complete_for_agent_with_tools(
+        self,
+        agent_name: str,
+        prompt: str,
+        system_message: Optional[str] = None,
+        response_format: Optional[Dict] = None,
+    ) -> LLMResponse:
+        """Execute completion using the agent's configured strategy.
+
+        Routes automatically based on ``models.yaml`` strategy:
+        - **native_web_access** (Gemini): plain completion (model searches natively).
+        - **tool_calling / tool_based** (GLM/Kimi): ``complete_with_tools``.
+        - **hybrid**: tries native first, falls back to tool-calling model.
+        - **reasoning_only / writing_only / etc.**: plain completion, no tools.
+        """
+        strategy = self._get_agent_strategy(agent_name)
+
+        # --- strategies that never need tools ---
+        if strategy in ("reasoning_only", "writing_only", "formatting_only", "json_only"):
+            return self.complete_for_agent(agent_name, prompt, system_message, response_format)
+
+        # Lazy-import to avoid circular deps
+        from utils.tools import get_tool_registry, get_research_tools
+
+        registry = get_tool_registry()
+        tools = get_research_tools()
+
+        primary_config = self.get_model_config(agent_name)
+        provider = self._providers.get(primary_config.provider)
+
+        # --- native_web_access (Gemini): just call complete, model searches on its own ---
+        if strategy == "native_web_access":
+            if provider and provider.is_available():
+                return provider.complete(prompt, primary_config, system_message, response_format)
+            return LLMResponse(content="", model=primary_config.model_id, usage={}, success=False,
+                               error=f"Provider '{primary_config.provider}' not available")
+
+        # --- tool_calling / tool_based: use tool loop ---
+        if strategy in ("tool_calling", "tool_based"):
+            if provider and provider.is_available():
+                return provider.complete_with_tools(
+                    prompt, primary_config, tools, registry, system_message
+                )
+            return LLMResponse(content="", model=primary_config.model_id, usage={}, success=False,
+                               error=f"Provider '{primary_config.provider}' not available")
+
+        # --- hybrid: try native (Gemini) first, fall back to tool-calling model ---
+        if strategy == "hybrid":
+            # 1. Try primary model (native web)
+            if provider and provider.is_available():
+                response = provider.complete(prompt, primary_config, system_message, response_format)
+                if response.success and response.content:
+                    return response
+                logger.warning(f"Primary model ({primary_config.model_id}) failed for {agent_name}, trying fallback")
+
+            # 2. Fallback to tool-calling model
+            fallback_config = self._get_fallback_model_config(agent_name)
+            if fallback_config:
+                fb_provider = self._providers.get(fallback_config.provider)
+                if fb_provider and fb_provider.is_available():
+                    return fb_provider.complete_with_tools(
+                        prompt, fallback_config, tools, registry, system_message
+                    )
+
+            return LLMResponse(content="", model=primary_config.model_id, usage={}, success=False,
+                               error="Both primary and fallback models failed")
+
+        # Catch-all: plain completion
+        return self.complete_for_agent(agent_name, prompt, system_message, response_format)
+
     def get_model_cost(self, model_id: str) -> Dict[str, float]:
         """Get cost per 1K tokens for a model.
         
@@ -582,6 +693,35 @@ def get_llm_client_for_agent(agent_name: str) -> Callable[..., LLMResponse]:
             response_format=response_format
         )
     
+    return complete
+
+
+def get_llm_with_tools_for_agent(agent_name: str) -> Callable[..., LLMResponse]:
+    """Get a strategy-aware completion function for an agent.
+
+    Unlike ``get_llm_client_for_agent`` (plain completion only), this routes
+    through ``complete_for_agent_with_tools`` which picks the right approach
+    (native web, tool calling, hybrid, or plain) based on ``models.yaml``.
+
+    Usage::
+
+        research = get_llm_with_tools_for_agent("event_discovery")
+        response = research("Find fintech conferences in 2025", system_message="...")
+    """
+    client = get_llm_client()
+
+    def complete(
+        prompt: str,
+        system_message: Optional[str] = None,
+        response_format: Optional[Dict] = None,
+    ) -> LLMResponse:
+        return client.complete_for_agent_with_tools(
+            agent_name=agent_name,
+            prompt=prompt,
+            system_message=system_message,
+            response_format=response_format,
+        )
+
     return complete
 
 

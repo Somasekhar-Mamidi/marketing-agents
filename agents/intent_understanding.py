@@ -145,38 +145,43 @@ class IntentUnderstandingAgent(BaseAgent):
         
         logger.info(f"Analyzing intent for query: {query}")
         
-        # Extract structured components
-        industry = self._extract_industry(query, params)
-        regions = self._extract_regions(query, params)
-        event_types = self._extract_event_types(query)
-        date_range = self._extract_date_range(query, params)
-        audience = self._extract_audience_target(query)
-        objectives = self._extract_objectives(query)
+        # Try LLM-powered extraction first
+        llm_intent = self._extract_intent_with_llm(query, params)
         
-        # Generate optimized search queries
-        search_queries = self._generate_search_queries(
-            industry, regions, event_types, date_range, query
-        )
-        
-        # Define quality thresholds
-        quality_requirements = self._define_quality_requirements(query, audience)
-        
-        # Build intent object
-        intent = UserIntent(
-            primary_goal=self._determine_primary_goal(query, objectives),
-            industry=industry["primary"],
-            sub_industries=industry["related"],
-            regions=regions,
-            event_types=event_types,
-            date_range=date_range,
-            audience_target=audience,
-            sponsorship_budget=self._extract_budget_hints(query),
-            strategic_objectives=objectives,
-            excluded_keywords=self._extract_exclusions(query),
-            priority_signals=self._calculate_priorities(query, audience, objectives),
-            search_queries=search_queries,
-            quality_requirements=quality_requirements
-        )
+        if llm_intent:
+            logger.info("Using LLM-extracted intent")
+            intent = llm_intent
+        else:
+            logger.info("Falling back to rule-based intent extraction")
+            # Extract structured components using rule-based fallback
+            industry = self._extract_industry(query, params)
+            regions = self._extract_regions(query, params)
+            event_types = self._extract_event_types(query)
+            date_range = self._extract_date_range(query, params)
+            audience = self._extract_audience_target(query)
+            objectives = self._extract_objectives(query)
+            
+            search_queries = self._generate_search_queries(
+                industry, regions, event_types, date_range, query
+            )
+            
+            quality_requirements = self._define_quality_requirements(query, audience)
+            
+            intent = UserIntent(
+                primary_goal=self._determine_primary_goal(query, objectives),
+                industry=industry["primary"],
+                sub_industries=industry["related"],
+                regions=regions,
+                event_types=event_types,
+                date_range=date_range,
+                audience_target=audience,
+                sponsorship_budget=self._extract_budget_hints(query),
+                strategic_objectives=objectives,
+                excluded_keywords=self._extract_exclusions(query),
+                priority_signals=self._calculate_priorities(query, audience, objectives),
+                search_queries=search_queries,
+                quality_requirements=quality_requirements
+            )
         
         logger.info(f"Intent extracted: Industry={intent.industry}, "
                    f"Regions={intent.regions}, EventTypes={intent.event_types}")
@@ -540,12 +545,88 @@ class IntentUnderstandingAgent(BaseAgent):
             "quality_requirements": intent.quality_requirements
         }
     
+    def _extract_intent_with_llm(self, query: str, params: Dict) -> Optional[UserIntent]:
+        """Extract intent using LLM for better accuracy."""
+        try:
+            from utils.llm_helpers import llm_call_with_json_output, INTENT_UNDERSTANDING_SYSTEM
+            
+            prompt = f"""
+            Analyze this query for event sponsorship research and extract structured intent.
+            
+            Query: "{query}"
+            Provided Industry: {params.get('industry', 'Not specified')}
+            Provided Region: {params.get('region', 'Not specified')}
+            
+            Extract and return JSON with:
+            - primary_goal: The main objective (lead_generation, brand_awareness, networking, etc.)
+            - industry: Primary industry focus (fintech, healthcare, technology, etc.)
+            - sub_industries: Array of related industries (max 3)
+            - regions: Array of target locations (cities, countries, or regions)
+            - event_types: Array of event types (conference, summit, expo, etc.)
+            - date_range: Object with start_date and end_date (or null if not specified)
+            - audience_target: Object describing target audience
+            - sponsorship_budget: Budget hint if mentioned (or null)
+            - strategic_objectives: Array of objectives
+            - excluded_keywords: Array of things to exclude
+            - search_queries: Array of 3-5 optimized search queries for finding events
+            - priority_signals: Object with audience_quality, relevance, timing weights (0-100)
+            
+            Return only valid JSON.
+            """
+            
+            result = llm_call_with_json_output(
+                llm_func=self.llm,
+                prompt=prompt,
+                system_message=INTENT_UNDERSTANDING_SYSTEM,
+                max_retries=2
+            )
+            
+            if not result:
+                return None
+            
+            # Build UserIntent from LLM result
+            from datetime import datetime
+            
+            date_range = result.get('date_range', {})
+            audience = result.get('audience_target', {})
+            
+            return UserIntent(
+                primary_goal=result.get('primary_goal', 'lead_generation'),
+                industry=result.get('industry', 'general'),
+                sub_industries=result.get('sub_industries', [])[:3],
+                regions=result.get('regions', []),
+                event_types=result.get('event_types', ['conference']),
+                date_range={
+                    'start_date': date_range.get('start_date'),
+                    'end_date': date_range.get('end_date'),
+                    'flexibility': date_range.get('flexibility', '6 months')
+                } if date_range else {'start_date': None, 'end_date': None, 'flexibility': '6 months'},
+                audience_target={
+                    'roles': audience.get('roles', []),
+                    'company_types': audience.get('company_types', []),
+                    'company_size': audience.get('company_size'),
+                    'seniority': audience.get('seniority', [])
+                } if audience else {'roles': [], 'company_types': [], 'seniority': []},
+                sponsorship_budget=result.get('sponsorship_budget'),
+                strategic_objectives=result.get('strategic_objectives', ['lead_generation']),
+                excluded_keywords=result.get('excluded_keywords', []),
+                priority_signals=result.get('priority_signals', {'audience_quality': 40, 'relevance': 40, 'timing': 20}),
+                search_queries=result.get('search_queries', [f"{result.get('industry', 'general')} events 2025"]),
+                quality_requirements={
+                    'min_expected_attendance': None,
+                    'preferred_formats': result.get('event_types', ['conference']),
+                    'must_have': []
+                }
+            )
+            
+        except Exception as e:
+            logger.warning(f"LLM intent extraction failed: {e}")
+            return None
+    
     def _calculate_confidence(self, intent: UserIntent) -> float:
-        """Calculate confidence score for the intent extraction."""
-        score = 0.7  # Base confidence
+        score = 0.7
         
-        # Increase for clear signals
-        if intent.industry != "fintech":  # Not just default
+        if intent.industry != "fintech":
             score += 0.1
         
         if len(intent.regions) > 0 and intent.regions[0] != "global":

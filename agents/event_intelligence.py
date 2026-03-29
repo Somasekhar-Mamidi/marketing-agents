@@ -1,26 +1,52 @@
 """Event Intelligence Agent - Strategic analysis of events for sponsorship."""
 
 import logging
+from typing import Optional
 from agents.base import BaseAgent, AgentInput, AgentOutput
+from utils.llm_helpers import extract_json_from_response, EVENT_INTELLIGENCE_SYSTEM
 
 logger = logging.getLogger(__name__)
 
 
+_INTELLIGENCE_PROMPT = """Analyze this event for sponsorship strategic intelligence.
+
+Search the web for CURRENT information about this event:
+- Recent sponsor lists and exhibitor data
+- Attendee demographics and job roles
+- Industry positioning and reputation
+- Recent news or announcements
+
+Event: {event_name}
+Theme: {theme}
+Location: {city}, {country}
+Priority Tier: {tier}
+Score: {score}
+Summary: {summary}
+
+Return JSON:
+{{
+  "attendee_roles": "Who typically attends (e.g., CTOs, VPs, Developers)",
+  "companies_attending": "Types of companies and notable names",
+  "strategic_value": "Why sponsor this event (2-3 sentences)",
+  "potential_roi": "Expected return (High/Medium/Low with justification)",
+  "ideal_sponsorship_format": "Best sponsorship type (booth, speaking, etc.)",
+  "competitor_presence": "Likely competitors at this event",
+  "key_opportunities": ["opportunity 1", "opportunity 2"],
+  "risks": ["risk 1", "risk 2"]
+}}
+"""
+
+
 class EventIntelligenceAgent(BaseAgent):
     """Provides strategic market intelligence for event sponsorship.
-    
-    Analyzes each event to determine:
-    - attendee_roles: Who attends (CTOs, Developers, etc.)
-    - companies_attending: Key companies
-    - strategic_value: Why sponsor
-    - potential_roi: Expected return on investment
-    - ideal_sponsorship_format: Best sponsorship type
+
+    Uses LLM-driven web search to gather current attendee data, sponsor
+    history, and competitive landscape. Falls back to heuristics.
     """
-    
+
     name = "event_intelligence"
     description = "Strategic analysis of events for sponsorship"
-    
-    # Known event patterns and their typical audiences
+
     EVENT_AUDIENCES = {
         "fintech": {
             "roles": "CFO, CTO, VP Engineering, Product Managers, Financial Technology Leaders",
@@ -47,90 +73,104 @@ class EventIntelligenceAgent(BaseAgent):
             "companies": "Various Tech Companies, Enterprises, Startups"
         }
     }
-    
+
     def execute(self, input_data: AgentInput) -> AgentOutput:
-        """Analyze events for strategic intelligence."""
         self.validate_input(input_data)
-        
-        # Get events from context
+
         events = input_data.context.get("events", [])
-        
         if not events:
             return AgentOutput(
                 agent_name=self.name,
                 findings={"events": [], "message": "No events to analyze"},
                 metadata={"agent": self.name, "event_count": 0}
             )
-        
+
         logger.info(f"Analyzing {len(events)} events for strategic intelligence")
-        
+
         analyzed_events = []
-        
         for event in events:
-            analyzed_event = self._analyze_event(event)
-            analyzed_events.append(analyzed_event)
-        
+            analyzed_events.append(self._analyze_event(event))
+
         return AgentOutput(
             agent_name=self.name,
             findings={"events": analyzed_events},
             metadata={"agent": self.name, "event_count": len(analyzed_events)}
         )
-    
+
     def _analyze_event(self, event: dict) -> dict:
-        """Analyze a single event for strategic intelligence."""
-        theme = event.get("theme", "").lower()
-        event_name = event.get("event_name", "").lower()
-        country = event.get("country", "").lower()
-        
-        # Determine audience type
-        audience_info = self._get_audience_info(theme)
-        
-        # Set attendee roles
-        event["attendee_roles"] = audience_info.get("roles", "Technology professionals")
-        
-        # Set companies attending
-        event["companies_attending"] = audience_info.get("companies", "Various")
-        
-        # Calculate strategic value
-        event["strategic_value"] = self._calculate_strategic_value(
-            event.get("priority_tier", ""),
-            event.get("overall_score", ""),
-            theme
-        )
-        
-        # Calculate potential ROI
-        event["potential_roi"] = self._calculate_potential_roi(
-            event.get("priority_tier", ""),
-            country
-        )
-        
-        # Determine ideal sponsorship format
-        event["ideal_sponsorship_format"] = self._determine_sponsorship_format(
-            event.get("priority_tier", ""),
-            theme
-        )
-        
+        """Analyze event — try LLM with web search, fall back to heuristics."""
+        llm_analysis = self._analyze_with_llm(event)
+        if llm_analysis:
+            event.update(llm_analysis)
+        else:
+            theme = event.get("theme", "").lower()
+            audience_info = self._get_audience_info(theme)
+            event["attendee_roles"] = audience_info.get("roles", "Technology professionals")
+            event["companies_attending"] = audience_info.get("companies", "Various")
+            event["strategic_value"] = self._calculate_strategic_value(
+                event.get("priority_tier", ""), event.get("overall_score", ""), theme
+            )
+            event["potential_roi"] = self._calculate_potential_roi(
+                event.get("priority_tier", ""), event.get("country", "").lower()
+            )
+            event["ideal_sponsorship_format"] = self._determine_sponsorship_format(
+                event.get("priority_tier", ""), theme
+            )
+
         event["status"] = "Intelligence Analyzed"
-        
         return event
-    
+
+    def _analyze_with_llm(self, event: dict) -> Optional[dict]:
+        """Use LLM with web research for strategic analysis."""
+        try:
+            prompt = _INTELLIGENCE_PROMPT.format(
+                event_name=event.get("event_name", "Unknown"),
+                theme=event.get("theme", "Unknown"),
+                city=event.get("city", ""),
+                country=event.get("country", ""),
+                tier=event.get("priority_tier", "Unknown"),
+                score=event.get("overall_score", "N/A"),
+                summary=event.get("summary", "N/A")[:300],
+            )
+
+            response = self.llm_with_tools(
+                prompt=prompt,
+                system_message=EVENT_INTELLIGENCE_SYSTEM,
+            )
+
+            if not response.success or not response.content:
+                return None
+
+            self._track_llm_usage(response)
+            data = extract_json_from_response(response.content)
+            if not data:
+                return None
+
+            return {
+                "attendee_roles": data.get("attendee_roles", "Technology professionals"),
+                "companies_attending": data.get("companies_attending", "Various tech companies"),
+                "strategic_value": data.get("strategic_value", ""),
+                "potential_roi": data.get("potential_roi", "Medium"),
+                "ideal_sponsorship_format": data.get("ideal_sponsorship_format", "Standard booth"),
+                "competitor_presence": data.get("competitor_presence", ""),
+                "key_opportunities": data.get("key_opportunities", []),
+                "risks": data.get("risks", []),
+            }
+
+        except Exception as e:
+            logger.debug(f"LLM analysis failed: {e}")
+            return None
+
+    # --- Fallback heuristics ---
+
     def _get_audience_info(self, theme: str) -> dict:
-        """Get audience information based on theme."""
         for key, info in self.EVENT_AUDIENCES.items():
             if key in theme:
                 return info
         return self.EVENT_AUDIENCES.get("technology", {})
-    
+
     def _calculate_strategic_value(self, tier: str, score: str, theme: str) -> str:
-        """Calculate strategic value of sponsoring the event."""
         score_val = float(score) if score else 5.0
-        
-        tier_bonus = 0
-        if "Tier 1" in tier:
-            tier_bonus = 2
-        elif "Tier 2" in tier:
-            tier_bonus = 1
-        
         if score_val >= 7:
             return (
                 f"High-impact sponsorship opportunity. {theme.title()} event with strong "
@@ -142,50 +182,32 @@ class EventIntelligenceAgent(BaseAgent):
                 f"Valuable sponsorship opportunity. {theme.title()} focused event with "
                 "good audience reach. Opportunity to generate leads and build partnerships."
             )
-        else:
-            return (
-                f"Moderate sponsorship value. {theme.title()} event with niche audience. "
-                "Consider for specific regional or audience targeting."
-            )
-    
+        return (
+            f"Moderate sponsorship value. {theme.title()} event with niche audience. "
+            "Consider for specific regional or audience targeting."
+        )
+
     def _calculate_potential_roi(self, tier: str, country: str) -> str:
-        """Calculate potential ROI estimate."""
-        # Regional ROI factors
-        roi_multiplier = 1.0
-        
-        high_roi_regions = ["usa", "united states", "uk", "singapore", "dubai"]
-        if any(r in country for r in high_roi_regions):
-            roi_multiplier = 1.5
-        
         if "Tier 1" in tier:
             return (
-                f"High ROI expected. Tier 1 events attract senior attendees with "
-                f"high purchasing authority. Estimated lead generation: 50+ qualified leads."
+                "High ROI expected. Tier 1 events attract senior attendees with "
+                "high purchasing authority. Estimated lead generation: 50+ qualified leads."
             )
         elif "Tier 2" in tier:
             return (
-                f"Good ROI expected. Tier 2 events provide solid brand exposure "
+                "Good ROI expected. Tier 2 events provide solid brand exposure "
                 "and lead generation opportunities. Estimated 25-50 qualified leads."
             )
-        else:
-            return (
-                f"Moderate ROI. Tier 3/4 events good for brand awareness and "
-                "niche targeting. Estimated 10-25 leads."
-            )
-    
+        return (
+            "Moderate ROI. Tier 3/4 events good for brand awareness and "
+            "niche targeting. Estimated 10-25 leads."
+        )
+
     def _determine_sponsorship_format(self, tier: str, theme: str) -> str:
-        """Determine the ideal sponsorship format."""
         if "Tier 1" in tier:
-            return (
-                "Gold/Platinum Sponsorship with booth, speaking slot, "
-                "logo placement, and dedicated networking session"
-            )
+            return ("Gold/Platinum Sponsorship with booth, speaking slot, "
+                    "logo placement, and dedicated networking session")
         elif "Tier 2" in tier:
-            return (
-                "Silver Sponsorship with booth, logo on website and materials, "
-                "networking access"
-            )
-        else:
-            return (
-                "Bronze Sponsorship or exhibitor booth with basic branding"
-            )
+            return ("Silver Sponsorship with booth, logo on website and materials, "
+                    "networking access")
+        return "Bronze Sponsorship or exhibitor booth with basic branding"

@@ -76,33 +76,72 @@ class EventPrioritizationAgent(BaseAgent):
         return sorted(events, key=sort_key)
     
     def _add_recommendation(self, event: dict) -> dict:
-        """Add recommendation based on event attributes."""
+        llm_rec = self._generate_recommendation_with_llm(event)
+        if llm_rec:
+            event["recommendation"] = llm_rec["recommendation"]
+            event["priority_justification"] = llm_rec["justification"]
+        else:
+            event["recommendation"] = self._generate_recommendation_fallback(event)
+        
+        event["status"] = "Prioritized"
+        return event
+    
+    def _generate_recommendation_with_llm(self, event: dict) -> Optional[dict]:
+        try:
+            from utils.llm_helpers import llm_call_with_json_output
+            
+            prompt = f"""
+            Analyze this event and provide a sponsorship recommendation:
+            
+            Event: {event.get('event_name', 'Unknown')}
+            Theme: {event.get('theme', 'Unknown')}
+            Tier: {event.get('priority_tier', 'Unknown')}
+            Score: {event.get('overall_score', 'N/A')}
+            Location: {event.get('city', '')}, {event.get('country', '')}
+            Strategic Value: {event.get('strategic_value', 'N/A')[:200]}
+            
+            Return JSON with:
+            - recommendation: One of "Reach out immediately", "Research further", "Monitor for next year"
+            - justification: 1-2 sentences explaining why
+            """
+            
+            result = llm_call_with_json_output(
+                llm_func=self.llm,
+                prompt=prompt,
+                system_message="You are an expert at evaluating marketing investments and providing clear recommendations.",
+                max_retries=1
+            )
+            
+            if not result:
+                return None
+            
+            return {
+                "recommendation": result.get("recommendation", "Research further"),
+                "justification": result.get("justification", "")
+            }
+            
+        except Exception as e:
+            logger.debug(f"LLM recommendation failed: {e}")
+            return None
+    
+    def _generate_recommendation_fallback(self, event: dict) -> str:
         tier = event.get("priority_tier", "")
         score = float(event.get("overall_score") or 0)
         theme = event.get("theme", "").lower()
         country = event.get("country", "").lower()
         
-        # High priority industries
         is_target_industry = any(ind in theme for ind in self.TARGET_INDUSTRIES)
-        
-        # High priority regions
         is_target_region = any(r in country for r in ["usa", "uk", "singapore", "dubai", "india"])
         
-        # Determine recommendation
         if "Tier 1" in tier and score >= 8:
-            recommendation = "Reach out immediately"
+            return "Reach out immediately"
         elif "Tier 1" in tier or (score >= 7 and is_target_industry):
-            recommendation = "Reach out immediately"
+            return "Reach out immediately"
         elif "Tier 2" in tier or (score >= 6 and is_target_industry and is_target_region):
-            recommendation = "Research further"
+            return "Research further"
         elif "Tier 2" in tier and is_target_industry:
-            recommendation = "Research further"
+            return "Research further"
         elif "Tier 3" in tier:
-            recommendation = "Research further"
+            return "Research further"
         else:
-            recommendation = "Monitor for next year"
-        
-        event["recommendation"] = recommendation
-        event["status"] = "Prioritized"
-        
-        return event
+            return "Monitor for next year"
