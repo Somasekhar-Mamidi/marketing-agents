@@ -26,14 +26,33 @@ class AgentOutput(BaseModel):
 
 class BaseAgent(ABC):
     """Base class for all research agents with LLM configuration support."""
-    
+
     name: str = "base_agent"
     description: str = "Base agent - to be extended"
-    
+
     def __init__(self):
         """Initialize agent with LLM client."""
         self._llm_complete: Optional[Callable[..., LLMResponse]] = None
         self._llm_usage_stats: list = []
+        self._progress_callback: Optional[Callable[[int, str], None]] = None
+
+    def set_progress_callback(self, callback: Callable[[int, str], None]):
+        """Set a callback for progress updates.
+
+        Args:
+            callback: Function that takes (progress_percent, message)
+        """
+        self._progress_callback = callback
+
+    def report_progress(self, progress: int, message: str = ""):
+        """Report progress via the callback if set.
+
+        Args:
+            progress: Progress percentage (0-100)
+            message: Optional progress message
+        """
+        if self._progress_callback:
+            self._progress_callback(min(100, max(0, progress)), message)
     
     @property
     def llm(self) -> Callable[..., LLMResponse]:
