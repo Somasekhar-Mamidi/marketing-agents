@@ -11,11 +11,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.orchestrator import Pipeline
 from agents.schema_initialization import SchemaInitializationAgent
+from agents.intent_understanding import IntentUnderstandingAgent
 from agents.event_discovery import EventDiscoveryAgent
 from agents.event_qualification import EventQualificationAgent
 from agents.event_website_scraper import EventWebsiteScraperAgent
 from agents.event_intelligence import EventIntelligenceAgent
 from agents.event_prioritization import EventPrioritizationAgent
+from agents.vendor_discovery import VendorDiscoveryAgent
 from agents.outreach_email import OutreachEmailAgent
 from agents.excel_table_generator import ExcelTableGeneratorAgent
 from utils.search import WebSearchTool
@@ -35,14 +37,16 @@ def init_session_state():
 
 
 def create_pipeline():
-    """Create pipeline with all 8 agents including Schema Initialization."""
+    """Create pipeline with all 10 agents."""
     pipeline = Pipeline()
     pipeline.add_agent(SchemaInitializationAgent())
+    pipeline.add_agent(IntentUnderstandingAgent())
     pipeline.add_agent(EventDiscoveryAgent(max_events=30, provider="auto"))
     pipeline.add_agent(EventQualificationAgent())
     pipeline.add_agent(EventWebsiteScraperAgent())
     pipeline.add_agent(EventIntelligenceAgent())
     pipeline.add_agent(EventPrioritizationAgent())
+    pipeline.add_agent(VendorDiscoveryAgent())
     pipeline.add_agent(OutreachEmailAgent())
     pipeline.add_agent(ExcelTableGeneratorAgent())
     return pipeline

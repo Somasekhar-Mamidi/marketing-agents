@@ -1,6 +1,7 @@
 """Event Prioritization Agent - Prioritizes and recommends events."""
 
 import logging
+from typing import Optional
 from agents.base import BaseAgent, AgentInput, AgentOutput
 
 logger = logging.getLogger(__name__)

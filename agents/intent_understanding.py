@@ -145,15 +145,14 @@ class IntentUnderstandingAgent(BaseAgent):
         
         logger.info(f"Analyzing intent for query: {query}")
         
-        # Try LLM-powered extraction first
         llm_intent = self._extract_intent_with_llm(query, params)
         
         if llm_intent:
             logger.info("Using LLM-extracted intent")
             intent = llm_intent
+            search_queries = intent.search_queries
         else:
             logger.info("Falling back to rule-based intent extraction")
-            # Extract structured components using rule-based fallback
             industry = self._extract_industry(query, params)
             regions = self._extract_regions(query, params)
             event_types = self._extract_event_types(query)
