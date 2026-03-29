@@ -1,6 +1,7 @@
 """Tests for Event Prioritization Agent."""
 
 import pytest
+from unittest.mock import patch
 from agents.event_prioritization import EventPrioritizationAgent
 from agents.base import AgentInput
 
@@ -67,7 +68,8 @@ class TestEventPrioritizationAgent:
         for event in result.findings["events"]:
             assert "recommendation" in event
     
-    def test_high_score_gets_must_sponsor_recommendation(self):
+    @patch.object(EventPrioritizationAgent, '_generate_recommendation_with_llm', return_value=None)
+    def test_high_score_gets_must_sponsor_recommendation(self, mock_llm):
         """Test that high-scoring events get 'reach out' recommendation."""
         agent = EventPrioritizationAgent()
         events = [{
@@ -75,19 +77,20 @@ class TestEventPrioritizationAgent:
             "overall_score": "9.5",
             "priority_tier": "Tier 1"
         }]
-        
+
         input_data = AgentInput(
             query="Prioritize",
             context={"events": events},
             parameters={}
         )
-        
+
         result = agent.execute(input_data)
         prioritized = result.findings["events"][0]
-        
+
         assert "reach" in prioritized["recommendation"].lower() or "must" in prioritized["recommendation"].lower()
-    
-    def test_low_score_gets_monitor_recommendation(self):
+
+    @patch.object(EventPrioritizationAgent, '_generate_recommendation_with_llm', return_value=None)
+    def test_low_score_gets_monitor_recommendation(self, mock_llm):
         """Test that low-scoring events get 'monitor' recommendation."""
         agent = EventPrioritizationAgent()
         events = [{
@@ -95,16 +98,16 @@ class TestEventPrioritizationAgent:
             "overall_score": "4.0",
             "priority_tier": "Tier 4"
         }]
-        
+
         input_data = AgentInput(
             query="Prioritize",
             context={"events": events},
             parameters={}
         )
-        
+
         result = agent.execute(input_data)
         prioritized = result.findings["events"][0]
-        
+
         assert "monitor" in prioritized["recommendation"].lower() or "optional" in prioritized["recommendation"].lower()
     
     def test_events_are_sorted_by_score(self, sample_events):

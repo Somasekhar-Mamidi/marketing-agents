@@ -140,16 +140,16 @@ class TestPipeline:
     
     @patch.object(MockAgent, 'llm_with_tools', autospec=True)
     def test_execute_stops_on_agent_failure(self, mock_llm_with_tools):
-        """Test that pipeline stops when agent fails."""
+        """Test that pipeline tracks agent failures."""
         mock_llm_with_tools.return_value = {"text": "mocked"}
-        pipeline = Pipeline()
+        pipeline = Pipeline(continue_on_error=False)
         pipeline.add_agent(MockAgent("success_agent"))
         pipeline.add_agent(MockAgent("fail_agent", fail=True))
         pipeline.add_agent(MockAgent("never_runs"))
-        
+
         with pytest.raises(Exception) as exc_info:
             pipeline.execute("test query")
-        
+
         assert "failed" in str(exc_info.value).lower()
     
     @patch.object(MockAgent, 'llm_with_tools', autospec=True)

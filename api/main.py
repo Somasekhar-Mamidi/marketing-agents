@@ -742,6 +742,17 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
     """Run standard event-focused pipeline."""
     import asyncio
     try:
+        # LLM connectivity check
+        try:
+            from utils.configurable_llm_client import get_llm_client
+            client = get_llm_client()
+            provider = list(client._providers.values())[0] if client._providers else None
+            if not provider or not provider.is_available():
+                logger.warning("LLM provider not available - pipeline will use fallback heuristics")
+                run["errors"].append("LLM provider not available, using fallback heuristics")
+        except Exception as e:
+            logger.warning(f"LLM connectivity check failed: {e}")
+
         # Step 1: Intent Understanding
         run["current_agent"] = "intent_understanding"
         run["progress_percent"] = 5
@@ -800,7 +811,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             )
             qualification_output = qualification_agent.execute(qualification_input)
             _store_agent_output(run, "event_qualification", qualification_output)
-            qualified_events = qualification_output.findings.get("scored_events", events)
+            qualified_events = qualification_output.findings.get("events", events)
         await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Step 4: Vendor Discovery (for service providers like booth builders)
@@ -857,6 +868,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             scraper_output = scraper_agent.execute(scraper_input)
             _store_agent_output(run, "event_website_scraper", scraper_output)
             scraped_events = scraper_output.findings.get("events", qualified_events)
+            qualified_events = scraped_events  # Feed enriched events forward
         await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Step 6: Event Intelligence
@@ -871,12 +883,14 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             )
             intel_output = intelligence_agent.execute(intel_input)
             _store_agent_output(run, "event_intelligence", intel_output)
-        await asyncio.sleep(0.1)  # yield for SSE polling
-        
+            intel_events = intel_output.findings.get("events", qualified_events)
+            qualified_events = intel_events
+        await asyncio.sleep(0.1)
+
         # Step 7: Event Prioritization
         run["current_agent"] = "event_prioritization"
         run["progress_percent"] = 85
-        
+
         if qualified_events:
             prioritization_agent = EventPrioritizationAgent()
             priority_input = AgentInput(
@@ -885,7 +899,8 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
             )
             priority_output = prioritization_agent.execute(priority_input)
             _store_agent_output(run, "event_prioritization", priority_output)
-            prioritized_events = priority_output.findings.get("prioritized_events", qualified_events)
+            prioritized_events = priority_output.findings.get("events", qualified_events)
+            qualified_events = prioritized_events
         await asyncio.sleep(0.1)  # yield for SSE polling
         
         # Step 8: Outreach Email

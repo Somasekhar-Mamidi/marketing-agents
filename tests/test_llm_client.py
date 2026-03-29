@@ -14,7 +14,8 @@ from utils.configurable_llm_client import (
 class TestLLMClient:
     """Test suite for LLMClient."""
     
-    def test_init_without_api_key(self):
+    @patch('utils.llm_client.get_env_var', return_value=None)
+    def test_init_without_api_key(self, mock_env):
         """Test initialization without API key."""
         client = LLMClient(api_key=None)
         assert client.api_key is None
@@ -26,15 +27,16 @@ class TestLLMClient:
         assert client.api_key == "test-key"
         assert client.is_configured
     
-    def test_complete_without_config(self):
+    @patch('utils.llm_client.get_env_var', return_value=None)
+    def test_complete_without_config(self, mock_env):
         """Test completion without configuration."""
         client = LLMClient(api_key=None)
         response = client.complete("test prompt")
-        
+
         assert not response.success
         assert "not configured" in response.error.lower()
     
-    @patch('utils.llm_client.OpenAI')
+    @patch('openai.OpenAI')
     def test_complete_success(self, mock_openai_class):
         """Test successful completion."""
         # Setup mock
@@ -60,7 +62,7 @@ class TestLLMClient:
         assert response.usage["prompt_tokens"] == 10
         assert response.usage["total_tokens"] == 15
     
-    @patch('utils.llm_client.OpenAI')
+    @patch('openai.OpenAI')
     def test_complete_with_system_message(self, mock_openai_class):
         """Test completion with system message."""
         mock_client = MagicMock()
@@ -88,7 +90,7 @@ class TestLLMClient:
         assert messages[0]["role"] == "system"
         assert messages[0]["content"] == "You are a helpful assistant"
     
-    @patch('utils.llm_client.OpenAI')
+    @patch('openai.OpenAI')
     def test_complete_api_error(self, mock_openai_class):
         """Test completion with API error."""
         mock_client = MagicMock()
