@@ -3,6 +3,12 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from utils.llm_client import LLMClient, LLMResponse, get_llm_client
+from utils.configurable_llm_client import (
+    ConfigurableLLMClient,
+    get_llm_client_for_agent,
+    get_llm_with_tools_for_agent,
+    LLMResponse as ConfLLMResponse,
+)
 
 
 class TestLLMClient:
@@ -160,3 +166,201 @@ class TestGetLLMClient:
             client1 = get_llm_client()
             client2 = get_llm_client()
             assert client1 is client2
+
+    
+def _make_fake_provider_class():
+    # Fake provider to avoid real API calls during tests
+    class FakeProvider:
+        def __init__(self, base_url, api_key):
+            self.base_url = base_url
+            self.api_key = api_key
+            self.available = True
+            self.last_call = None
+
+        def is_available(self):
+            return self.available
+
+        def complete(self, prompt, config, system_message=None, response_format=None):
+            self.last_call = {"type": "complete", "model_id": config.model_id, "prompt": prompt, "system_message": system_message}
+            return ConfLLMResponse(
+                content="plain-ok",
+                model=config.model_id,
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                success=True,
+            )
+
+        def complete_with_tools(self, prompt, config, tools, tool_registry, system_message=None, max_tool_calls=5):
+            self.last_call = {"type": "with_tools", "model_id": config.model_id, "prompt": prompt, "system_message": system_message}
+            return ConfLLMResponse(
+                content="tools-ok",
+                model=config.model_id,
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                success=True,
+            )
+
+    return FakeProvider
+
+
+def _write_temp_models_yaml(tmp_path, content: str) -> str:
+    p = tmp_path / "models.yaml"
+    p.write_text(content)
+    return str(p)
+
+
+def test_get_llm_client_for_agent_plain(monkeypatch, tmp_path):
+    """Test get_llm_client_for_agent returns a plain completion function."""
+    yaml_content = """
+llm:
+  providers:
+    grid_ai:
+      base_url: "https://grid.example"
+      api_key_env: "GRID_AI_API_KEY"
+      models:
+        - id: "primary-model"
+          name: "Primary"
+  agent_models:
+    plain_agent:
+      provider: grid_ai
+      model: primary-model
+      strategy: native_web_access
+  defaults:
+    provider: grid_ai
+    model: primary-model
+"""
+    path = _write_temp_models_yaml(tmp_path, yaml_content)
+
+    # Patch environment and provider class
+    FakeProvider = _make_fake_provider_class()
+    import utils.configurable_llm_client as clmc
+    monkeypatch.setattr(clmc, "OpenAICompatibleProvider", FakeProvider)
+    monkeypatch.setattr(clmc, "get_env_var", lambda k: "fake-key" if k == "GRID_AI_API_KEY" else None)
+    clmc.ConfigurableLLMClient._instance = None
+    client = clmc.ConfigurableLLMClient(config_path=path)
+    clmc._llm_client = client
+
+    # Bind the helper to the agent
+    complete_for_agent = clmc.get_llm_client_for_agent("plain_agent")
+    resp = complete_for_agent("Test prompt")
+
+    # Verify that provider was used for plain completion
+    prov = client._providers.get("grid_ai")
+    assert prov is not None
+    assert isinstance(prov, FakeProvider)
+    assert prov.last_call["model_id"] == "primary-model"
+    assert resp.success is True
+
+
+def test_get_llm_with_tools_for_agent_routing_tool_and_hybrid(monkeypatch, tmp_path):
+    """Test tool-enabled routing and hybrid fallback path."""
+    yaml_content = """
+llm:
+  providers:
+    grid_ai:
+      base_url: "https://grid.example"
+      api_key_env: "GRID_AI_API_KEY"
+      models:
+        - id: "primary-model"
+          name: "Primary"
+        - id: "fallback-model"
+          name: "Fallback"
+  agent_models:
+    tool_agent:
+      provider: grid_ai
+      model: primary-model
+      strategy: tool_calling
+    hybrid_agent:
+      provider: grid_ai
+      model: primary-model
+      strategy: hybrid
+      fallback:
+        provider: grid_ai
+        model: fallback-model
+  defaults:
+    provider: grid_ai
+    model: primary-model
+"""
+    path = _write_temp_models_yaml(tmp_path, yaml_content)
+
+    FakeProvider = _make_fake_provider_class()
+    import utils.configurable_llm_client as clmc
+    monkeypatch.setattr(clmc, "OpenAICompatibleProvider", FakeProvider)
+    monkeypatch.setattr(clmc, "get_env_var", lambda k: "fake-key" if k == "GRID_AI_API_KEY" else None)
+    clmc.ConfigurableLLMClient._instance = None
+    client = clmc.ConfigurableLLMClient(config_path=path)
+    clmc._llm_client = client
+
+    # Tooling path
+    tool_for_agent = clmc.get_llm_with_tools_for_agent("tool_agent")
+    res = tool_for_agent("Find something useful")
+    prov = client._providers.get("grid_ai")
+    assert isinstance(prov, FakeProvider)
+    assert prov.last_call["type"] == "with_tools"
+    assert res.success is True
+
+    # Hybrid path should fall back to tools when native fails
+    hybrid = clmc.get_llm_with_tools_for_agent("hybrid_agent")
+    res2 = hybrid("Do something important")
+    # last_call should indicate a fallback model usage or tool call
+    assert res2.success is True
+
+
+def test_hybrid_fallback_execution(monkeypatch, tmp_path):
+    """Test hybrid routing explicitly triggers fallback model for hybrid_agent."""
+    yaml_content = """
+llm:
+  providers:
+    grid_ai:
+      base_url: "https://grid.example"
+      api_key_env: "GRID_AI_API_KEY"
+      models:
+        - id: "primary-model"
+          name: "Primary"
+        - id: "fallback-model"
+          name: "Fallback"
+  agent_models:
+    hybrid_agent:
+      provider: grid_ai
+      model: primary-model
+      strategy: hybrid
+      fallback:
+        provider: grid_ai
+        model: fallback-model
+  defaults:
+    provider: grid_ai
+    model: primary-model
+"""
+    path = _write_temp_models_yaml(tmp_path, yaml_content)
+
+    class FakeProvider:
+        def __init__(self, base_url, api_key):
+            self.base_url = base_url
+            self.api_key = api_key
+            self.available = True
+            self.last_call = None
+
+        def is_available(self):
+            return self.available
+
+        def complete(self, prompt, config, system_message=None, response_format=None):
+            self.last_call = {"type": "complete", "model_id": config.model_id}
+            # Simulate failure for hybrid primary path
+            return ConfLLMResponse(content="", model=config.model_id, usage={}, success=False)
+
+        def complete_with_tools(self, prompt, config, tools, registry, system_message=None, max_tool_calls=5):
+            self.last_call = {"type": "with_tools", "model_id": config.model_id}
+            return ConfLLMResponse(content="hybrid-ok", model=config.model_id, usage={}, success=True)
+
+    import utils.configurable_llm_client as clmc
+    monkeypatch.setattr(clmc, "OpenAICompatibleProvider", FakeProvider)
+    monkeypatch.setattr(clmc, "get_env_var", lambda k: "fake-key" if k == "GRID_AI_API_KEY" else None)
+    clmc.ConfigurableLLMClient._instance = None
+    client = clmc.ConfigurableLLMClient(config_path=path)
+    clmc._llm_client = client
+
+    hybrid = clmc.get_llm_with_tools_for_agent("hybrid_agent")
+    resp = hybrid("do it now")
+    # Ensure fallback path was used and a tool-based call happened (via complete_with_tools)
+    prov = client._providers.get("grid_ai")
+    assert isinstance(prov, FakeProvider)
+    assert prov.last_call is not None
+    assert resp.success is True

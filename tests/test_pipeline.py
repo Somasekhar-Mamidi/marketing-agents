@@ -1,7 +1,7 @@
 """Tests for Pipeline Orchestrator."""
 
 import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock, MagicMock, patch
 from pipeline.orchestrator import Pipeline
 from agents.base import AgentInput, AgentOutput, BaseAgent
 
@@ -64,8 +64,10 @@ class TestPipeline:
         
         assert len(pipeline.agents) == 3
     
-    def test_execute_requires_agents(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execute_requires_agents(self, mock_llm_with_tools):
         """Test that execute raises error without agents."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         
         with pytest.raises(ValueError) as exc_info:
@@ -73,8 +75,10 @@ class TestPipeline:
         
         assert "no agents" in str(exc_info.value).lower()
     
-    def test_execute_single_agent(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execute_single_agent(self, mock_llm_with_tools):
         """Test execution with single agent."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("single_agent"))
         
@@ -83,8 +87,10 @@ class TestPipeline:
         assert result.agent_name == "single_agent"
         assert result.status == "success"
     
-    def test_execute_multiple_agents_sequential(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execute_multiple_agents_sequential(self, mock_llm_with_tools):
         """Test that agents execute sequentially."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("agent_1"))
         pipeline.add_agent(MockAgent("agent_2"))
@@ -94,8 +100,10 @@ class TestPipeline:
         assert result.agent_name == "agent_2"
         assert len(pipeline.execution_history) == 2
     
-    def test_execute_passes_context_between_agents(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execute_passes_context_between_agents(self, mock_llm_with_tools):
         """Test that context is passed between agents."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("agent_1"))
         pipeline.add_agent(MockAgent("agent_2"))
@@ -104,8 +112,10 @@ class TestPipeline:
         
         assert len(result.findings["events"]) >= 0
     
-    def test_execute_with_initial_context(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execute_with_initial_context(self, mock_llm_with_tools):
         """Test execution with initial context."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("agent_1"))
         
@@ -114,8 +124,10 @@ class TestPipeline:
         
         assert result.status == "success"
     
-    def test_execute_with_parameters(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execute_with_parameters(self, mock_llm_with_tools):
         """Test execution with parameters."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("test"))
         
@@ -126,8 +138,10 @@ class TestPipeline:
         
         assert result.status == "success"
     
-    def test_execute_stops_on_agent_failure(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execute_stops_on_agent_failure(self, mock_llm_with_tools):
         """Test that pipeline stops when agent fails."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("success_agent"))
         pipeline.add_agent(MockAgent("fail_agent", fail=True))
@@ -138,8 +152,10 @@ class TestPipeline:
         
         assert "failed" in str(exc_info.value).lower()
     
-    def test_get_history(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_get_history(self, mock_llm_with_tools):
         """Test getting execution history."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("agent_1"))
         pipeline.add_agent(MockAgent("agent_2"))
@@ -151,8 +167,10 @@ class TestPipeline:
         assert history[0].agent_name == "agent_1"
         assert history[1].agent_name == "agent_2"
     
-    def test_clear_history(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_clear_history(self, mock_llm_with_tools):
         """Test clearing execution history."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("test"))
         pipeline.execute("test")
@@ -163,8 +181,10 @@ class TestPipeline:
         
         assert len(pipeline.execution_history) == 0
     
-    def test_agent_execution_count(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_agent_execution_count(self, mock_llm_with_tools):
         """Test that each agent is executed exactly once per run."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("agent_1"))
         pipeline.add_agent(MockAgent("agent_2"))
@@ -174,8 +194,10 @@ class TestPipeline:
         assert pipeline.agents[0].execution_count == 1
         assert pipeline.agents[1].execution_count == 1
     
-    def test_execute_returns_final_output(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execute_returns_final_output(self, mock_llm_with_tools):
         """Test that execute returns output from last agent."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("first"))
         pipeline.add_agent(MockAgent("last"))
@@ -184,8 +206,10 @@ class TestPipeline:
         
         assert result.agent_name == "last"
     
-    def test_pipeline_with_empty_initial_context(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_pipeline_with_empty_initial_context(self, mock_llm_with_tools):
         """Test pipeline with empty initial context."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("test"))
         
@@ -193,8 +217,10 @@ class TestPipeline:
         
         assert result.status == "success"
     
-    def test_pipeline_with_none_initial_context(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_pipeline_with_none_initial_context(self, mock_llm_with_tools):
         """Test pipeline with None initial context."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         pipeline.add_agent(MockAgent("test"))
         
@@ -202,8 +228,10 @@ class TestPipeline:
         
         assert result.status == "success"
     
-    def test_agent_validate_input_called(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_agent_validate_input_called(self, mock_llm_with_tools):
         """Test that agent validate_input is called."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         agent = MockAgent("test")
         agent.validate_input = Mock(return_value=True)
@@ -213,8 +241,10 @@ class TestPipeline:
         
         assert agent.validate_input.called
     
-    def test_execution_history_preserves_order(self):
+    @patch.object(MockAgent, 'llm_with_tools', autospec=True)
+    def test_execution_history_preserves_order(self, mock_llm_with_tools):
         """Test that execution history preserves agent order."""
+        mock_llm_with_tools.return_value = {"text": "mocked"}
         pipeline = Pipeline()
         for i in range(5):
             pipeline.add_agent(MockAgent(f"agent_{i}"))

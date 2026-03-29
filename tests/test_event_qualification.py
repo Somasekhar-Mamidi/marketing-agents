@@ -186,19 +186,19 @@ class TestEventQualificationAgent:
         assert result.status == "success"
         assert len(result.findings["events"]) == 1
     
-    @patch('agents.event_qualification.WebSearchTool')
-    def test_execute_makes_search_calls(self, mock_search_tool):
-        """Test that search is called for each event."""
-        mock_search = MagicMock()
-        mock_search.search.return_value = [
-            {"title": "Result", "url": "https://test.com", "content": "Info"}
-        ]
-        mock_search_tool.return_value = mock_search
+    @patch.object(EventQualificationAgent, 'llm_with_tools')
+    def test_execute_with_llm_happy_path(self, mock_llm_method):
+        """Test that LLM qualification is used when available."""
+        mock_response = MagicMock()
+        mock_response.success = True
+        mock_response.content = '{"audience_relevance_score": 8.5, "industry_reputation_score": 8.0, "attendance_score": 7.5, "sponsor_value_score": 8.0, "regional_importance_score": 7.0, "reasoning": "Top tier event"}'
+        mock_response.model = "gemini-2.0-flash"
+        mock_response.usage = {"total_tokens": 200}
+        mock_llm_method.return_value = mock_response
         
         agent = EventQualificationAgent()
         events = [
-            {"event_name": "Event 1", "event_website": "https://e1.com"},
-            {"event_name": "Event 2", "event_website": "https://e2.com"}
+            {"event_name": "Event 1", "event_website": "https://e1.com", "theme": "FinTech", "city": "London", "country": "UK"}
         ]
         
         input_data = AgentInput(
@@ -208,8 +208,36 @@ class TestEventQualificationAgent:
         )
         
         result = agent.execute(input_data)
+        qualified = result.findings["events"][0]
         
-        assert mock_search.search.call_count >= 2
+        assert float(qualified["audience_relevance_score"]) == 8.5
+        assert float(qualified["overall_score"]) > 7.0
+    
+    @patch.object(EventQualificationAgent, 'llm_with_tools')
+    def test_execute_fallback_when_llm_fails(self, mock_llm_method):
+        """Test rule-based fallback when LLM fails."""
+        mock_response = MagicMock()
+        mock_response.success = False
+        mock_response.error = "API Error"
+        mock_llm_method.return_value = mock_response
+        
+        agent = EventQualificationAgent()
+        events = [
+            {"event_name": "Event 1", "event_website": "https://e1.com", "theme": "FinTech", "city": "London", "country": "UK"}
+        ]
+        
+        input_data = AgentInput(
+            query="Qualify",
+            context={"events": events},
+            parameters={}
+        )
+        
+        result = agent.execute(input_data)
+        qualified = result.findings["events"][0]
+        
+        assert "audience_relevance_score" in qualified
+        assert "overall_score" in qualified
+        assert qualified["status"] == "Qualified"
     
     def test_validate_input_requires_query(self):
         """Test that empty query raises error."""

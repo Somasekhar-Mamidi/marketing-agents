@@ -1,6 +1,7 @@
 """Tests for Event Intelligence Agent."""
 
 import pytest
+from unittest.mock import patch, MagicMock
 from agents.event_intelligence import EventIntelligenceAgent
 from agents.base import AgentInput
 
@@ -202,3 +203,52 @@ class TestEventIntelligenceAgent:
         
         assert "event_count" in result.metadata
         assert result.metadata["event_count"] == 3
+    
+    @patch.object(EventIntelligenceAgent, 'llm_with_tools')
+    def test_execute_with_llm_happy_path(self, mock_llm_method):
+        """Test that LLM data is used when available."""
+        mock_response = MagicMock()
+        mock_response.success = True
+        mock_response.content = '{"attendee_roles": "CTOs and VPs", "companies_attending": "Major tech companies", "strategic_value": "High value event", "potential_roi": "High ROI", "ideal_sponsorship_format": "Gold sponsorship"}'
+        mock_response.model = "gemini-2.0-flash"
+        mock_response.usage = {"total_tokens": 200}
+        mock_llm_method.return_value = mock_response
+        
+        agent = EventIntelligenceAgent()
+        events = [{"event_name": "Test Conf", "theme": "AI", "city": "NYC", "country": "USA", "priority_tier": "Tier 1", "overall_score": "8.5", "summary": "Test"}]
+        
+        input_data = AgentInput(
+            query="Analyze",
+            context={"events": events},
+            parameters={}
+        )
+        
+        result = agent.execute(input_data)
+        analyzed = result.findings["events"][0]
+        
+        assert analyzed["attendee_roles"] == "CTOs and VPs"
+        assert analyzed["strategic_value"] == "High value event"
+    
+    @patch.object(EventIntelligenceAgent, 'llm_with_tools')
+    def test_execute_fallback_when_llm_fails(self, mock_llm_method):
+        """Test fallback heuristics when LLM fails."""
+        mock_response = MagicMock()
+        mock_response.success = False
+        mock_response.error = "Rate limit"
+        mock_llm_method.return_value = mock_response
+        
+        agent = EventIntelligenceAgent()
+        events = [{"event_name": "Test Conf", "theme": "FinTech", "city": "London", "country": "UK", "priority_tier": "Tier 2", "overall_score": "7.0", "summary": "Test"}]
+        
+        input_data = AgentInput(
+            query="Analyze",
+            context={"events": events},
+            parameters={}
+        )
+        
+        result = agent.execute(input_data)
+        analyzed = result.findings["events"][0]
+        
+        assert "attendee_roles" in analyzed
+        assert "strategic_value" in analyzed
+        assert analyzed["status"] == "Intelligence Analyzed"
