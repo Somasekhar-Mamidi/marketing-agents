@@ -214,8 +214,8 @@ class PipelineStartRequest(BaseModel):
     industry: Optional[str] = None
     region: Optional[str] = None
     theme: Optional[str] = None
-    enable_checkpoints: bool = True
-    auto_approve: bool = False
+    enable_checkpoints: bool = False
+    auto_approve: bool = True
 
 
 class PipelineStatusResponse(BaseModel):
@@ -680,14 +680,14 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
         run["events_count"] = len(events)
         run["progress_percent"] = 25
         
-        # Checkpoint 1: Event Review
         if request.enable_checkpoints and events:
-            checkpoint_id = checkpoint_mgr.create_checkpoint(
+            checkpoint = checkpoint_mgr.create_checkpoint(
                 pipeline_id=pipeline_id,
                 checkpoint_type=CheckpointType.EVENT_REVIEW,
                 name="Review Discovered Events",
                 data={"events": events}
             )
+            checkpoint_id = checkpoint.id
             
             if request.auto_approve:
                 checkpoint_mgr.approve_checkpoint(checkpoint_id, "auto", "Auto-approved")
@@ -701,8 +701,111 @@ async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
                     return
                 run["status"] = "running"
         
-        # Continue with remaining agents...
-        # (Qualification, Scraping, Intelligence, Prioritization, Vendor Discovery, etc.)
+        # Step 3: Event Qualification
+        run["current_agent"] = "event_qualification"
+        run["progress_percent"] = 35
+        
+        qualified_events = []
+        if events:
+            qualification_agent = EventQualificationAgent()
+            qualification_input = AgentInput(
+                query=request.query,
+                context={"events": events, "intent": intent_data}
+            )
+            qualification_output = qualification_agent.execute(qualification_input)
+            qualified_events = qualification_output.findings.get("scored_events", events)
+        
+        # Step 4: Vendor Discovery (for service providers like booth builders)
+        run["current_agent"] = "vendor_discovery"
+        run["progress_percent"] = 50
+        
+        vendor_discovery_agent = VendorDiscoveryAgent(max_vendors_per_event=10)
+        
+        # Check if user is looking for service providers directly
+        query_lower = request.query.lower()
+        service_keywords = ['booth', 'vendor', 'contractor', 'exhibitor', 'sponsor', 'service provider']
+        is_service_search = any(kw in query_lower for kw in service_keywords)
+        
+        vendors = []
+        if is_service_search and request.region:
+            vendor_input = AgentInput(
+                query=f"Find {request.industry or 'event'} service providers in {request.region}",
+                context={"events": qualified_events},
+                parameters={
+                    "service_category": "booth_builder",
+                    "location": request.region
+                }
+            )
+            vendor_output = vendor_discovery_agent.execute(vendor_input)
+            vendors = vendor_output.findings.get("vendors", [])
+        elif qualified_events:
+            # Traditional vendor discovery for events
+            vendor_input = AgentInput(
+                query=request.query,
+                context={"events": qualified_events}
+            )
+            vendor_output = vendor_discovery_agent.execute(vendor_input)
+            vendors = vendor_output.findings.get("vendors", [])
+        
+        run["vendors_count"] = len(vendors)
+        
+        # Save vendors to database
+        for vendor in vendors:
+            if db:
+                db.save_vendor(vendor)
+        
+        # Step 5: Website Scraping (for events)
+        run["current_agent"] = "event_website_scraper"
+        run["progress_percent"] = 65
+        
+        if qualified_events:
+            scraper_agent = EventWebsiteScraperAgent()
+            scraper_input = AgentInput(
+                query=request.query,
+                context={"events": qualified_events}
+            )
+            scraper_output = scraper_agent.execute(scraper_input)
+            scraped_events = scraper_output.findings.get("events", qualified_events)
+        
+        # Step 6: Event Intelligence
+        run["current_agent"] = "event_intelligence"
+        run["progress_percent"] = 75
+        
+        if qualified_events:
+            intelligence_agent = EventIntelligenceAgent()
+            intel_input = AgentInput(
+                query=request.query,
+                context={"events": qualified_events}
+            )
+            intel_output = intelligence_agent.execute(intel_input)
+        
+        # Step 7: Event Prioritization
+        run["current_agent"] = "event_prioritization"
+        run["progress_percent"] = 85
+        
+        if qualified_events:
+            prioritization_agent = EventPrioritizationAgent()
+            priority_input = AgentInput(
+                query=request.query,
+                context={"events": qualified_events}
+            )
+            priority_output = prioritization_agent.execute(priority_input)
+            prioritized_events = priority_output.findings.get("prioritized_events", qualified_events)
+        
+        # Step 8: Outreach Email
+        run["current_agent"] = "outreach_email"
+        run["progress_percent"] = 95
+        
+        if vendors or qualified_events:
+            email_agent = OutreachEmailAgent()
+            email_input = AgentInput(
+                query=request.query,
+                context={
+                    "events": qualified_events[:5] if qualified_events else [],
+                    "vendors": vendors[:5] if vendors else []
+                }
+            )
+            email_output = email_agent.execute(email_input)
         
         run["progress_percent"] = 100
         run["status"] = "completed"

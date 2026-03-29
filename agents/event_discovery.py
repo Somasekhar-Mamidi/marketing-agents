@@ -2,7 +2,9 @@
 
 import json
 import logging
-from typing import Optional
+import time
+import httpx
+from typing import Optional, Callable
 from agents.base import BaseAgent, AgentInput, AgentOutput
 from schema import get_empty_schema
 from utils.search import WebSearchTool
@@ -53,16 +55,39 @@ class EventDiscoveryAgent(BaseAgent):
         "bootcamp", "unconference", "meetup"
     ]
     
-    def __init__(self, max_events: int = 50, provider: str = "tavily"):
+    def __init__(self, max_events: int = 50, provider: str = "tavily", max_search_queries: int = 8, 
+                 max_execution_time: int = 60):
         self.search_tool = WebSearchTool(provider=provider)
         self.max_events = max_events
+        self.max_search_queries = max_search_queries
+        self.max_execution_time = max_execution_time
+        self.progress_callback: Optional[Callable[[str, int], None]] = None
+    
+    def set_progress_callback(self, callback: Callable[[str, int], None]):
+        """Set a callback for progress updates: callback(message, percent)."""
+        self.progress_callback = callback
+    
+    def _report_progress(self, message: str, percent: int):
+        """Report progress via callback if set."""
+        logger.info(f"Progress [{percent}%]: {message}")
+        if self.progress_callback:
+            try:
+                self.progress_callback(message, percent)
+            except Exception as e:
+                logger.warning(f"Progress callback failed: {e}")
+    
+    def _check_timeout(self, start_time: float) -> bool:
+        """Check if execution has exceeded max time."""
+        elapsed = time.time() - start_time
+        if elapsed > self.max_execution_time:
+            logger.warning(f"Timeout reached after {elapsed:.1f}s (limit: {self.max_execution_time}s)")
+            return True
+        return False
     
     def execute(self, input_data: AgentInput) -> AgentOutput:
-        """Execute event discovery."""
+        """Execute event discovery with timeout safeguards."""
         self.validate_input(input_data)
-        import time
         start_time = time.time()
-        max_execution_time = 120  # 2 minute timeout
         
         params = input_data.parameters
         
@@ -91,6 +116,10 @@ class EventDiscoveryAgent(BaseAgent):
             
             search_queries = self._build_search_queries(industry, region, theme)
         
+        # Limit search queries to prevent excessive API calls
+        search_queries = search_queries[:self.max_search_queries]
+        logger.info(f"Limited to {len(search_queries)} search queries")
+        
         region = params.get("region", "") if not intent_data else (regions[0] if regions else "")
         theme = params.get("theme", "")
         
@@ -103,11 +132,19 @@ class EventDiscoveryAgent(BaseAgent):
                 metadata={"agent": self.name, "event_count": len(existing_data)}
             )
         
+        self._report_progress("Starting event discovery", 15)
         events = []
+        queries_completed = 0
         
         for search_query in search_queries:
+            # Check timeout at start of each iteration
+            if self._check_timeout(start_time):
+                self._report_progress(f"Timeout reached, returning {len(events)} events found so far", 65)
+                break
+            
             try:
-                results = self.search_tool.search(search_query, max_results=20)
+                results = self.search_tool.search(search_query, max_results=10)  # Reduced from 20
+                queries_completed += 1
                 
                 for result in results:
                     event = self._parse_search_result(result, industry)
@@ -123,23 +160,51 @@ class EventDiscoveryAgent(BaseAgent):
                         if len(events) >= max_events:
                             break
                 
+                # Update progress
+                progress = 15 + int((queries_completed / len(search_queries)) * 40)
+                self._report_progress(f"Search {queries_completed}/{len(search_queries)}: Found {len(events)} events", progress)
+                
                 if len(events) >= max_events:
+                    logger.info(f"Reached max events limit ({max_events})")
                     break
                     
-            except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            except Exception as e:
                 logger.warning(f"Search failed for '{search_query}': {e}")
                 continue
         
+        self._report_progress(f"Search complete, processing {len(events)} events", 55)
+        
+        # Check timeout before filtering
+        if self._check_timeout(start_time):
+            return self._create_output(events, industry, region, theme, search_queries, timeout=True)
+        
         # Filter out events with uncertain dates
         events = self._filter_uncertain_dates(events)
+        self._report_progress(f"Date filtering complete, {len(events)} events remain", 60)
         
-        # Apply quality scoring if intent data available
+        # Apply quality scoring if intent data available - with timeout checks
         if intent_data and events:
-            events = self._score_events_by_intent(events, intent_data)
+            self._report_progress("Scoring events by relevance...", 65)
+            events = self._score_events_by_intent_with_timeout(events, intent_data, start_time)
             # Sort by score (highest first)
             events.sort(key=lambda x: x.get("discovery_score", 0), reverse=True)
         
-        logger.info(f"Discovered {len(events)} qualified events")
+        elapsed = time.time() - start_time
+        logger.info(f"Discovered {len(events)} qualified events in {elapsed:.1f}s")
+        self._report_progress(f"Discovery complete: {len(events)} events", 100)
+        
+        return self._create_output(events, industry, region, theme, search_queries)
+    
+    def _create_output(self, events: list, industry: str, region: str, theme: str, 
+                      search_queries: list, timeout: bool = False) -> AgentOutput:
+        """Create the agent output."""
+        metadata = {
+            "agent": self.name, 
+            "event_count": len(events),
+            "search_queries": search_queries
+        }
+        if timeout:
+            metadata["timeout_reached"] = True
         
         return AgentOutput(
             agent_name=self.name,
@@ -151,12 +216,140 @@ class EventDiscoveryAgent(BaseAgent):
                     "theme": theme
                 }
             },
-            metadata={
-                "agent": self.name, 
-                "event_count": len(events),
-                "search_queries": search_queries
-            }
+            metadata=metadata
         )
+    
+    def _score_events_by_intent_with_timeout(self, events: list, intent_data: dict, start_time: float) -> list:
+        """Score events with periodic timeout checks."""
+        scored_events = []
+        total_events = len(events)
+        
+        target_industry = intent_data.get("industry", "").lower()
+        target_regions = [r.lower() for r in intent_data.get("regions", [])]
+        target_event_types = [t.lower() for t in intent_data.get("event_types", [])]
+        quality_reqs = intent_data.get("quality_requirements", {})
+        min_score_threshold = quality_reqs.get("relevance_threshold", 0.5)
+        
+        for idx, event in enumerate(events):
+            # Check timeout every 5 events
+            if idx % 5 == 0 and self._check_timeout(start_time):
+                logger.warning(f"Timeout during scoring at event {idx}/{total_events}")
+                # Return what we have so far
+                scored_events.extend(events[idx:])
+                break
+            
+            score = 0.0
+            score_breakdown = {}
+            
+            # 1. Industry match (25% weight)
+            event_theme = event.get("theme", "").lower()
+            event_name = event.get("event_name", "").lower()
+            event_summary = event.get("summary", "").lower()
+            
+            industry_score = 0
+            if target_industry in event_theme or target_industry in event_name:
+                industry_score = 1.0
+            elif target_industry in event_summary:
+                industry_score = 0.7
+            else:
+                # Check related industries
+                related = intent_data.get("sub_industries", [])
+                for rel in related:
+                    if rel.lower() in event_summary:
+                        industry_score = 0.5
+                        break
+            
+            score += industry_score * 0.25
+            score_breakdown["industry_match"] = industry_score * 0.25
+            
+            # 2. Region/location match (20% weight)
+            event_city = event.get("city", "").lower()
+            event_country = event.get("country", "").lower()
+            
+            region_score = 0
+            if target_regions and target_regions[0] != "global":
+                location_text = f"{event_city} {event_country}"
+                for region in target_regions:
+                    if region in location_text or region in event_name:
+                        region_score = 1.0
+                        break
+                if not region_score:
+                    region_score = 0.3
+            else:
+                region_score = 0.8
+            
+            score += region_score * 0.20
+            score_breakdown["region_match"] = region_score * 0.20
+            
+            # 3. Event type match (15% weight)
+            type_score = 0
+            for event_type in target_event_types:
+                if event_type in event_name:
+                    type_score = 1.0
+                    break
+            if not type_score:
+                event_keywords = ["conference", "summit", "expo", "forum", "festival"]
+                if any(kw in event_name for kw in event_keywords):
+                    type_score = 0.7
+            
+            score += type_score * 0.15
+            score_breakdown["event_type_match"] = type_score * 0.15
+            
+            # 4. Date quality (15% weight)
+            start_date = event.get("start_date", "")
+            expected_date = event.get("expected_date", "")
+            
+            date_score = 0
+            if start_date and start_date != "Not Found":
+                date_score = 1.0
+            elif expected_date and expected_date != "Not Found":
+                if "2025" in expected_date or "2026" in expected_date:
+                    date_score = 0.7
+                else:
+                    date_score = 0.4
+            
+            score += date_score * 0.15
+            score_breakdown["date_quality"] = date_score * 0.15
+            
+            # 5. Content richness (15% weight)
+            summary_len = len(event.get("summary", ""))
+            website = event.get("event_website", "")
+            
+            content_score = 0
+            if summary_len > 300:
+                content_score = 1.0
+            elif summary_len > 100:
+                content_score = 0.6
+            elif summary_len > 0:
+                content_score = 0.3
+            
+            if website and "." in website:
+                content_score += 0.2
+            
+            score += min(content_score, 1.0) * 0.15
+            score_breakdown["content_richness"] = min(content_score, 1.0) * 0.15
+            
+            # 6. Exclusion penalty (negative scoring)
+            excluded_keywords = intent_data.get("excluded_keywords", [])
+            exclusion_penalty = 0
+            for excluded in excluded_keywords:
+                if excluded.lower() in event_name or excluded.lower() in event_summary:
+                    exclusion_penalty += 0.3
+            
+            score -= min(exclusion_penalty, 0.5)
+            
+            # Normalize to 0-100 scale
+            final_score = max(0, min(100, int(score * 100)))
+            
+            # Add score to event
+            event["discovery_score"] = final_score
+            event["discovery_score_breakdown"] = score_breakdown
+            
+            # Only include if meets minimum threshold
+            if final_score >= (min_score_threshold * 100):
+                scored_events.append(event)
+        
+        return scored_events
     
     def _build_search_queries(self, industry: str, region: str, theme: str) -> list:
         queries = []
@@ -353,129 +546,3 @@ class EventDiscoveryAgent(BaseAgent):
                 return True
         
         return False
-    
-    def _score_events_by_intent(self, events: list, intent_data: dict) -> list:
-        """Score events based on alignment with user intent."""
-        scored_events = []
-        
-        target_industry = intent_data.get("industry", "").lower()
-        target_regions = [r.lower() for r in intent_data.get("regions", [])]
-        target_event_types = [t.lower() for t in intent_data.get("event_types", [])]
-        quality_reqs = intent_data.get("quality_requirements", {})
-        min_score_threshold = quality_reqs.get("relevance_threshold", 0.5)
-        
-        for event in events:
-            score = 0.0
-            score_breakdown = {}
-            
-            # 1. Industry match (25% weight)
-            event_theme = event.get("theme", "").lower()
-            event_name = event.get("event_name", "").lower()
-            event_summary = event.get("summary", "").lower()
-            
-            industry_score = 0
-            if target_industry in event_theme or target_industry in event_name:
-                industry_score = 1.0
-            elif target_industry in event_summary:
-                industry_score = 0.7
-            else:
-                # Check related industries
-                related = intent_data.get("sub_industries", [])
-                for rel in related:
-                    if rel.lower() in event_summary:
-                        industry_score = 0.5
-                        break
-            
-            score += industry_score * 0.25
-            score_breakdown["industry_match"] = industry_score * 0.25
-            
-            # 2. Region/location match (20% weight)
-            event_city = event.get("city", "").lower()
-            event_country = event.get("country", "").lower()
-            
-            region_score = 0
-            if target_regions and target_regions[0] != "global":
-                location_text = f"{event_city} {event_country}"
-                for region in target_regions:
-                    if region in location_text or region in event_name:
-                        region_score = 1.0
-                        break
-                if not region_score:
-                    region_score = 0.3  # Partial credit for having location data
-            else:
-                region_score = 0.8  # Global search, no penalty
-            
-            score += region_score * 0.20
-            score_breakdown["region_match"] = region_score * 0.20
-            
-            # 3. Event type match (15% weight)
-            type_score = 0
-            for event_type in target_event_types:
-                if event_type in event_name:
-                    type_score = 1.0
-                    break
-            if not type_score:
-                # Check for general event keywords
-                event_keywords = ["conference", "summit", "expo", "forum", "festival"]
-                if any(kw in event_name for kw in event_keywords):
-                    type_score = 0.7
-            
-            score += type_score * 0.15
-            score_breakdown["event_type_match"] = type_score * 0.15
-            
-            # 4. Date quality (15% weight)
-            start_date = event.get("start_date", "")
-            expected_date = event.get("expected_date", "")
-            date_verified = event.get("date_verified", False)
-            
-            date_score = 0
-            if start_date and start_date != "Not Found":
-                date_score = 1.0
-            elif expected_date and expected_date != "Not Found":
-                if "2025" in expected_date or "2026" in expected_date:
-                    date_score = 0.7
-                else:
-                    date_score = 0.4
-            
-            score += date_score * 0.15
-            score_breakdown["date_quality"] = date_score * 0.15
-            
-            # 5. Content richness (15% weight)
-            summary_len = len(event.get("summary", ""))
-            website = event.get("event_website", "")
-            
-            content_score = 0
-            if summary_len > 300:
-                content_score = 1.0
-            elif summary_len > 100:
-                content_score = 0.6
-            elif summary_len > 0:
-                content_score = 0.3
-            
-            if website and "." in website:
-                content_score += 0.2
-            
-            score += min(content_score, 1.0) * 0.15
-            score_breakdown["content_richness"] = min(content_score, 1.0) * 0.15
-            
-            # 6. Exclusion penalty (negative scoring)
-            excluded_keywords = intent_data.get("excluded_keywords", [])
-            exclusion_penalty = 0
-            for excluded in excluded_keywords:
-                if excluded.lower() in event_name or excluded.lower() in event_summary:
-                    exclusion_penalty += 0.3
-            
-            score -= min(exclusion_penalty, 0.5)  # Cap penalty at 0.5
-            
-            # Normalize to 0-100 scale
-            final_score = max(0, min(100, int(score * 100)))
-            
-            # Add score to event
-            event["discovery_score"] = final_score
-            event["discovery_score_breakdown"] = score_breakdown
-            
-            # Only include if meets minimum threshold
-            if final_score >= (min_score_threshold * 100):
-                scored_events.append(event)
-        
-        return scored_events

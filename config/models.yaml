@@ -2,36 +2,60 @@ llm:
   agent_models:
     event_discovery:
       max_tokens: 3000
-      model: glm-latest
+      model: gemini-3-flash-preview
       provider: grid_ai
+      strategy: hybrid
+      primary:
+        model: gemini-3-flash-preview
+        method: native_web_access
+        reason: Native web search, no external APIs needed
+      fallback:
+        model: glm-latest
+        method: tool_calling
+        tool: web_search
+        search_backend: duckduckgo
+        reason: Tool-based search when Gemini limit reached
       recommendations:
-        best_for_budget: glm-flash-experimental
+        best_for_budget: gemini-3-flash-preview
         best_for_quality: gemini-3.1-pro
         capped:
-          model: gemini-3.1-pro
-          reason: Search grounding + 1M context
+          model: gemini-3-flash-preview
+          reason: Native web access + 1M context + cheapest
         non_capped:
           model: glm-latest
-          reason: Balanced cost and quality
+          reason: Tool-based fallback with DuckDuckGo
       temperature: 0.3
     event_intelligence:
       max_tokens: 4000
-      model: open-large-sa
+      model: gemini-3.1-pro
       provider: grid_ai
+      strategy: hybrid
+      primary:
+        model: gemini-3.1-pro
+        method: native_web_access
+        reason: Best quality native web search for strategic analysis
+      fallback:
+        model: kimi-latest
+        method: tool_calling
+        tool: web_search
+        search_backend: duckduckgo
+        reason: 200K context + tool-based search when Gemini limit reached
       recommendations:
-        best_for_budget: open-large-sa
+        best_for_budget: gemini-3-flash-preview
         best_for_quality: gemini-3.1-pro
         capped:
           model: gemini-3.1-pro
-          reason: Search grounding + 1M context
+          reason: Native web access + 1M context + best quality
         non_capped:
-          model: open-large-sa
-          reason: Long context (Kimi) for research
+          model: kimi-latest
+          reason: Long context (200K) + tool-based fallback
       temperature: 0.4
     event_prioritization:
       max_tokens: 2000
       model: glm-flash-experimental
       provider: grid_ai
+      strategy: reasoning_only
+      notes: No web search needed - ranking and sorting task
       recommendations:
         best_for_budget: glm-flash-experimental
         best_for_quality: claude-sonnet-4-5
@@ -44,14 +68,16 @@ llm:
       temperature: 0.2
     event_qualification:
       max_tokens: 4000
-      model: glm-latest
+      model: claude-sonnet-4-6
       provider: grid_ai
+      strategy: reasoning_only
+      notes: No web search needed - judgment and scoring task
       recommendations:
         best_for_budget: glm-latest
         best_for_quality: claude-opus-4-6
         capped:
           model: claude-sonnet-4-6
-          reason: High-quality scoring
+          reason: High-quality scoring + reasoning
         non_capped:
           model: glm-latest
           reason: Best judgment among non-capped
@@ -60,6 +86,10 @@ llm:
       max_tokens: 2000
       model: glm-flash-experimental
       provider: grid_ai
+      strategy: tool_based
+      tool: web_fetch
+      search_backend: duckduckgo
+      notes: Uses web_fetch tool with DuckDuckGo backend
       recommendations:
         best_for_budget: glm-flash-experimental
         best_for_quality: claude-haiku-4-5-20251001
@@ -74,6 +104,8 @@ llm:
       max_tokens: 2000
       model: glm-flash-experimental
       provider: grid_ai
+      strategy: formatting_only
+      notes: No web search needed - table formatting task
       recommendations:
         best_for_budget: glm-flash-experimental
         best_for_quality: claude-haiku-4-5-20251001
@@ -86,8 +118,10 @@ llm:
       temperature: 0.1
     intent_understanding:
       max_tokens: 4000
-      model: glm-latest
+      model: claude-opus-4-6
       provider: grid_ai
+      strategy: reasoning_only
+      notes: No web search needed - pure reasoning task
       recommendations:
         best_for_budget: glm-latest
         best_for_quality: claude-opus-4-6
@@ -96,12 +130,14 @@ llm:
           reason: Highest reasoning capability
         non_capped:
           model: glm-latest
-          reason: Best reasoning among non-capped
+          reason: Good reasoning, cheaper
       temperature: 0.3
     outreach_email:
       max_tokens: 4000
-      model: open-fast
+      model: claude-sonnet-4-5
       provider: grid_ai
+      strategy: writing_only
+      notes: No web search needed - writing task (can use Gemini for research if needed)
       recommendations:
         best_for_budget: open-fast
         best_for_quality: claude-sonnet-4-6
@@ -116,6 +152,8 @@ llm:
       max_tokens: 2000
       model: glm-flash-experimental
       provider: grid_ai
+      strategy: json_only
+      notes: No web search needed - JSON generation task
       recommendations:
         best_for_budget: glm-flash-experimental
         best_for_quality: claude-haiku-4-5-20251001
@@ -128,17 +166,28 @@ llm:
       temperature: 0.1
     vendor_discovery:
       max_tokens: 3000
-      model: open-large-sa
+      model: gemini-3-flash-preview
       provider: grid_ai
+      strategy: hybrid
+      primary:
+        model: gemini-3-flash-preview
+        method: native_web_access
+        reason: Native web search for vendor research
+      fallback:
+        model: glm-latest
+        method: tool_calling
+        tool: web_search
+        search_backend: duckduckgo
+        reason: Tool-based vendor search when Gemini limit reached
       recommendations:
-        best_for_budget: open-large-sa
+        best_for_budget: gemini-3-flash-preview
         best_for_quality: gemini-3.1-pro
         capped:
           model: gemini-3-flash-preview
-          reason: Search + 1M context, cheap
+          reason: Native web access + 1M context + cheapest
         non_capped:
-          model: open-large-sa
-          reason: Long context for vendor research
+          model: glm-latest
+          reason: Tool-based fallback with DuckDuckGo
       temperature: 0.3
   defaults:
     max_tokens: 2000
@@ -333,14 +382,19 @@ llm:
         supports_vision: false
         tier: fast
       name: Juspay Grid AI
-selection_strategy:
-  cost_thresholds:
-    balanced: 0.005
-    cost_sensitive: 0.001
-    high_value: 0.02
-    ultra_critical: 0.1
-  primary_criteria:
-  - cost_efficiency
-  - reasoning_quality
-  - context_length
-  - search_capability
+  selection_strategy:
+    cost_thresholds:
+      balanced: 0.005
+      cost_sensitive: 0.001
+      high_value: 0.02
+      ultra_critical: 0.1
+    fallback:
+      enabled: true
+      trigger: budget_limit
+      default_fallback: glm-latest
+      search_backend: duckduckgo
+    primary_criteria:
+    - cost_efficiency
+    - reasoning_quality
+    - context_length
+    - search_capability

@@ -282,6 +282,24 @@ class VendorDiscoveryAgent(BaseAgent):
         
         return False
     
+    def _discover_vendors_for_event(self, event: Dict) -> List[Dict]:
+        """Discover vendors (sponsors/exhibitors) for a specific event."""
+        event_name = event.get('event_name', '')
+        if not event_name:
+            return []
+        
+        vendors = []
+        
+        # Search for sponsors
+        sponsors = self._search_current_sponsors(event_name)
+        vendors.extend(sponsors)
+        
+        # Search for exhibitors
+        exhibitors = self._search_exhibitors(event_name)
+        vendors.extend(exhibitors)
+        
+        return vendors
+    
     def _search_current_sponsors(self, event_name: str) -> List[Dict]:
         """Search for current sponsors."""
         query = f"{event_name} 2025 sponsors partners"

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class WebSearchTool:
     """Unified web search tool with automatic fallback and caching."""
 
-    def __init__(self, provider: str = "auto", enable_cache: bool = True):
+    def __init__(self, provider: str = "auto", enable_cache: bool = False):
         """Initialize the search tool.
 
         Args:
@@ -31,49 +31,11 @@ class WebSearchTool:
         if self._client is not None:
             return self._client
 
-        providers_to_try = []
-
-        if self.provider == "auto":
-            providers_to_try = ["tavily", "serper", "search1api", "duckduckgo"]
-        else:
-            providers_to_try = [self.provider]
-
-        for prov in providers_to_try:
-            self._provider_tried.append(prov)
-            try:
-                if prov == "tavily":
-                    from tavily import TavilyClient
-                    api_key = get_env_var("TAVILY_API_KEY", required=False)
-                    if api_key and api_key != "your_tavily_api_key_here":
-                        self._client = TavilyClient(api_key=api_key)
-                        self.provider = prov
-                        logger.info(f"Using Tavily search provider")
-                        return self._client
-
-                elif prov == "serper":
-                    api_key = get_env_var("SERPER_API_KEY", required=False)
-                    if api_key and api_key != "your_serper_api_key_here":
-                        self._client = _SerperClient()
-                        self.provider = prov
-                        logger.info(f"Using Serper search provider")
-                        return self._client
-
-                elif prov == "search1api":
-                    api_key = get_env_var("SEARCH1API_KEY", required=False)
-                    if api_key and api_key != "your_search1api_key_here":
-                        self._client = _Search1APIClient()
-                        self.provider = prov
-                        logger.info(f"Using Search1API search provider")
-                        return self._client
-
-            except (ImportError, ValueError, ConnectionError) as e:
-                logger.warning(f"Failed to initialize {prov}: {e}")
-                continue
-
-        # Fallback to DuckDuckGo (free, no key needed)
+        # Use DuckDuckGo as primary search provider (free, no API key needed)
+        # Paid services (Tavily, Serper, Search1API) removed - using Gemini native web instead
         self._client = _DuckDuckGoClient()
         self.provider = "duckduckgo"
-        logger.info(f"Falling back to DuckDuckGo search provider")
+        logger.info(f"Using DuckDuckGo search provider (free, no API key)")
         return self._client
 
     @retry_with_backoff(
@@ -209,35 +171,50 @@ class _Search1APIClient:
 
 
 class _DuckDuckGoClient:
-    """DuckDuckGo (free, no key required)."""
-
-    def __init__(self):
-        self.base_url = "https://lite.duckduckgo.com/lite/"
-        self.client = httpx.Client(timeout=30.0)
-
     def search(self, query: str, num_results: int = 10) -> list[dict]:
-        """Execute search via DuckDuckGo Lite."""
-        params = {"q": query}
-
-        response = self.client.get(self.base_url, params=params)
-        response.raise_for_status()
-
-        results = []
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        for result in soup.select("a.result__a")[:num_results]:
-            try:
-                title = result.get_text(strip=True)
-                url = result.get("href", "")
-
-                if title and url:
+        import urllib.request
+        import urllib.parse
+        import json
+        import ssl
+        
+        # Create SSL context that allows legacy TLS (for macOS LibreSSL compatibility)
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        
+        # Use DuckDuckGo HTML interface
+        encoded_query = urllib.parse.quote(query)
+        url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
+        request = urllib.request.Request(url, headers=headers)
+        
+        with urllib.request.urlopen(request, context=ssl_context, timeout=30) as response:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(response.read(), "html.parser")
+            
+            results = []
+            for result in soup.select(".result")[:num_results]:
+                title_elem = result.select_one(".result__a")
+                snippet_elem = result.select_one(".result__snippet")
+                
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+                    href = title_elem.get("href", "")
+                    content = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                    
+                    # Clean up the URL (DuckDuckGo uses redirects)
+                    if href.startswith("//"):
+                        href = "https:" + href
+                    
                     results.append({
                         "title": title,
-                        "url": url,
-                        "content": "",
+                        "url": href,
+                        "content": content,
                     })
-            except (AttributeError, TypeError):
-                continue
-
-        return results
+            
+            return results

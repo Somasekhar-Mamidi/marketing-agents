@@ -85,6 +85,151 @@ class OpenAICompatibleProvider(LLMProvider):
                 raise
         return self._client
     
+    def complete_with_tools(
+        self,
+        prompt: str,
+        config: ModelConfig,
+        tools: list,
+        tool_registry: Any,
+        system_message: Optional[str] = None,
+        max_tool_calls: int = 5
+    ) -> LLMResponse:
+        """Execute completion with tool calling support.
+        
+        This method allows the LLM to call tools (like web_search) during generation.
+        It handles the tool calling loop: LLM decides to call tool -> tool executes -> 
+        results returned to LLM -> LLM synthesizes final answer.
+        
+        Args:
+            prompt: User prompt
+            config: Model configuration
+            tools: List of tool definitions for OpenAI format
+            tool_registry: Registry to execute tools
+            system_message: Optional system message
+            max_tool_calls: Maximum number of tool call rounds (prevents infinite loops)
+            
+        Returns:
+            LLMResponse with final content
+        """
+        import json
+        start_time = time.time()
+        
+        try:
+            client = self._get_client()
+            
+            messages = []
+            if system_message:
+                messages.append({"role": "system", "content": system_message})
+            messages.append({"role": "user", "content": prompt})
+            
+            tool_calls_made = 0
+            
+            while tool_calls_made < max_tool_calls:
+                kwargs = {
+                    "model": config.model_id,
+                    "messages": messages,
+                    "temperature": config.temperature,
+                    "max_tokens": config.max_tokens,
+                    "timeout": config.timeout_seconds,
+                    "tools": tools,
+                    "tool_choice": "auto"
+                }
+                
+                response = client.chat.completions.create(**kwargs)
+                message = response.choices[0].message
+                
+                # Check if model wants to call tools
+                if not message.tool_calls:
+                    # No tool calls, we have final answer
+                    latency_ms = int((time.time() - start_time) * 1000)
+                    return LLMResponse(
+                        content=message.content or "",
+                        model=response.model,
+                        usage={
+                            "prompt_tokens": response.usage.prompt_tokens,
+                            "completion_tokens": response.usage.completion_tokens,
+                            "total_tokens": response.usage.total_tokens
+                        },
+                        success=True,
+                        latency_ms=latency_ms
+                    )
+                
+                # Model wants to call tools - add assistant message to conversation
+                messages.append({
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in message.tool_calls
+                    ]
+                })
+                
+                # Execute each tool call
+                for tool_call in message.tool_calls:
+                    tool_name = tool_call.function.name
+                    try:
+                        arguments = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                    
+                    logger.info(f"Tool call: {tool_name}({arguments})")
+                    
+                    # Execute tool
+                    tool_result = tool_registry.execute(tool_name, arguments)
+                    
+                    # Add tool result to conversation
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_result
+                    })
+                
+                tool_calls_made += 1
+            
+            # Max tool calls reached, get final response without tools
+            kwargs = {
+                "model": config.model_id,
+                "messages": messages,
+                "temperature": config.temperature,
+                "max_tokens": config.max_tokens,
+                "timeout": config.timeout_seconds
+            }
+            
+            response = client.chat.completions.create(**kwargs)
+            latency_ms = int((time.time() - start_time) * 1000)
+            
+            return LLMResponse(
+                content=response.choices[0].message.content or "",
+                model=response.model,
+                usage={
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens
+                },
+                success=True,
+                latency_ms=latency_ms,
+                error=f"Max tool calls ({max_tool_calls}) reached"
+            )
+            
+        except Exception as e:
+            logger.error(f"LLM completion with tools failed: {e}")
+            latency_ms = int((time.time() - start_time) * 1000)
+            return LLMResponse(
+                content="",
+                model=config.model_id,
+                usage={},
+                success=False,
+                error=str(e),
+                latency_ms=latency_ms
+            )
+    
     @retry_with_backoff(
         max_retries=3,
         base_delay=1.0,
