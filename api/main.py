@@ -634,12 +634,112 @@ async def start_pipeline(
     )
 
 
+def _is_vendor_only_search(query: str, industry: str) -> bool:
+    query_lower = query.lower()
+    vendor_keywords = ['vendor', 'vendors', 'booth', 'booths', 'contractor', 'contractors',
+                       'service provider', 'service providers', 'exhibitor', 'exhibitors',
+                       'sponsor', 'sponsors', 'builder', 'builders', 'stand builder']
+    has_vendor_keyword = any(kw in query_lower for kw in vendor_keywords)
+    event_keywords = ['event', 'events', 'conference', 'conferences', 'summit', 'summits',
+                      'expo', 'expos', 'trade show', 'trade shows', 'forum', 'forums']
+    has_event_keyword = any(kw in query_lower for kw in event_keywords)
+    return has_vendor_keyword and not has_event_keyword
+
+
 async def run_pipeline(pipeline_id: str, request: PipelineStartRequest):
     """Run the full pipeline in background."""
     run = active_runs.get(pipeline_id)
     if not run:
         return
     
+    try:
+        is_vendor_search = _is_vendor_only_search(request.query, request.industry or "")
+        if is_vendor_search:
+            await _run_vendor_pipeline(pipeline_id, request, run)
+        else:
+            await _run_event_pipeline(pipeline_id, request, run)
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}")
+        run["status"] = "failed"
+        run["errors"].append(str(e))
+        run["completed_at"] = datetime.utcnow().isoformat()
+
+
+async def _run_vendor_pipeline(pipeline_id: str, request: PipelineStartRequest, run: dict):
+    """Run pipeline optimized for vendor/service provider searches."""
+    from agents.base import AgentInput
+    import asyncio
+    
+    run["current_agent"] = "intent_understanding"
+    run["progress_percent"] = 10
+    await asyncio.sleep(0.5)
+    
+    intent_agent = IntentUnderstandingAgent()
+    intent_input = AgentInput(
+        query=request.query,
+        context={"industry": request.industry or "", "region": request.region or ""}
+    )
+    intent_output = intent_agent.execute(intent_input)
+    _store_agent_output(run, "intent_understanding", intent_output)
+    
+    run["current_agent"] = "vendor_discovery"
+    run["progress_percent"] = 40
+    await asyncio.sleep(0.5)
+    
+    vendor_discovery_agent = VendorDiscoveryAgent(max_vendors_per_event=15)
+    
+    query_lower = request.query.lower()
+    service_category = "vendor"
+    if 'booth' in query_lower or 'stand' in query_lower:
+        service_category = "booth_builder"
+    elif 'catering' in query_lower:
+        service_category = "catering"
+    
+    location = request.region or ""
+    if not location:
+        intent_data = intent_output.findings.get("intent", {})
+        regions = intent_data.get("regions", [])
+        if regions:
+            location = regions[0]
+    
+    vendor_input = AgentInput(
+        query=request.query,
+        context={},
+        parameters={"service_category": service_category, "location": location}
+    )
+    vendor_output = vendor_discovery_agent.execute(vendor_input)
+    _store_agent_output(run, "vendor_discovery", vendor_output)
+    vendors = vendor_output.findings.get("vendors", [])
+    
+    run["vendors_count"] = len(vendors)
+    run["progress_percent"] = 70
+    await asyncio.sleep(0.5)
+    
+    for vendor in vendors:
+        if db:
+            db.save_vendor(vendor)
+    
+    run["current_agent"] = "event_intelligence"
+    run["progress_percent"] = 80
+    await asyncio.sleep(0.3)
+    
+    run["current_agent"] = "outreach_email"
+    run["progress_percent"] = 90
+    await asyncio.sleep(0.3)
+    
+    if vendors:
+        email_agent = OutreachEmailAgent()
+        email_input = AgentInput(query=request.query, context={"vendors": vendors[:5]})
+        email_output = email_agent.execute(email_input)
+        _store_agent_output(run, "outreach_email", email_output)
+    
+    run["progress_percent"] = 100
+    run["status"] = "completed"
+    run["completed_at"] = datetime.utcnow().isoformat()
+
+
+async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, run: dict):
+    """Run standard event-focused pipeline."""
     try:
         # Step 1: Intent Understanding
         run["current_agent"] = "intent_understanding"
