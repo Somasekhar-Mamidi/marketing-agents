@@ -122,6 +122,10 @@ class EventDiscoveryAgent(BaseAgent):
                 metadata={"agent": self.name, "event_count": len(existing_data)}
             )
 
+        region_clause = f" in {region}" if region else ""
+        theme_clause = f" focused on {theme}" if theme else ""
+        self.emit_thinking("searching", f"Discovering {industry} events{region_clause}{theme_clause}")
+        self.emit_thinking("searching", f"Asking LLM to find up to {max_events} events via web search...")
         self._report_progress("Starting LLM-driven event discovery", 10)
 
         # --- build the research prompt ---
@@ -153,13 +157,25 @@ class EventDiscoveryAgent(BaseAgent):
             events = self._parse_llm_response(response.content, industry)
             self._track_llm_usage(response)
         else:
+            self.emit_thinking("fallback", f"LLM search failed: {response.error}. Falling back to DuckDuckGo...")
             logger.warning(f"LLM search failed: {response.error}. Falling back to DuckDuckGo.")
             self._report_progress("Falling back to DuckDuckGo search...", 30)
             events = self._fallback_search(industry, region, theme, max_events, start_time)
+            self.emit_thinking("result", f"DuckDuckGo fallback found {len(events)} events")
 
         # --- post-processing: filter, dedup, score ---
+        before_filter = len(events)
         events = self._filter_excluded_events(events, industry)
+        excluded = before_filter - len(events)
+        if excluded > 0:
+            self.emit_thinking("filtering", f"Removed {excluded} company-specific events")
+
+        before_dedup = len(events)
         events = self._deduplicate(events)
+        deduped = before_dedup - len(events)
+        if deduped > 0:
+            self.emit_thinking("filtering", f"Removed {deduped} duplicate events")
+
         events = events[:max_events]
 
         if intent_data and events:
@@ -168,6 +184,7 @@ class EventDiscoveryAgent(BaseAgent):
             events.sort(key=lambda x: x.get("discovery_score", 0), reverse=True)
 
         elapsed = time.time() - start_time
+        self.emit_thinking("result", f"Discovery complete: {len(events)} unique events")
         logger.info(f"Discovered {len(events)} events in {elapsed:.1f}s")
         self._report_progress(f"Discovery complete: {len(events)} events", 100)
 

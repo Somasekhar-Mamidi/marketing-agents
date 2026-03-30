@@ -139,19 +139,22 @@ class IntentUnderstandingAgent(BaseAgent):
     def execute(self, input_data: AgentInput) -> AgentOutput:
         """Analyze user input and extract structured intent."""
         self.validate_input(input_data)
-        
+
         query = input_data.query.lower()
         params = input_data.parameters
-        
+
+        self.emit_thinking("searching", f"Analyzing query: '{input_data.query}'")
         logger.info(f"Analyzing intent for query: {query}")
-        
+
         llm_intent = self._extract_intent_with_llm(query, params)
         
         if llm_intent:
+            self.emit_thinking("result", f"LLM extracted intent — Industry: {llm_intent.industry}, Regions: {llm_intent.regions}")
             logger.info("Using LLM-extracted intent")
             intent = llm_intent
             search_queries = intent.search_queries
         else:
+            self.emit_thinking("fallback", "LLM intent extraction failed, using rule-based extraction")
             logger.info("Falling back to rule-based intent extraction")
             industry = self._extract_industry(query, params)
             regions = self._extract_regions(query, params)
@@ -159,13 +162,15 @@ class IntentUnderstandingAgent(BaseAgent):
             date_range = self._extract_date_range(query, params)
             audience = self._extract_audience_target(query)
             objectives = self._extract_objectives(query)
-            
+
             search_queries = self._generate_search_queries(
                 industry, regions, event_types, date_range, query
             )
-            
+
             quality_requirements = self._define_quality_requirements(query, audience)
-            
+
+            self.emit_thinking("result", f"Detected industry: {industry['primary']}, regions: {regions}")
+
             intent = UserIntent(
                 primary_goal=self._determine_primary_goal(query, objectives),
                 industry=industry["primary"],
@@ -181,7 +186,8 @@ class IntentUnderstandingAgent(BaseAgent):
                 search_queries=search_queries,
                 quality_requirements=quality_requirements
             )
-        
+
+        self.emit_thinking("result", f"Generated {len(search_queries)} search queries, confidence: {self._calculate_confidence(intent):.0%}")
         logger.info(f"Intent extracted: Industry={intent.industry}, "
                    f"Regions={intent.regions}, EventTypes={intent.event_types}")
         

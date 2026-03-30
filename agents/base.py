@@ -36,6 +36,7 @@ class BaseAgent(ABC):
         self._llm_with_tools_complete: Optional[Callable[..., LLMResponse]] = None
         self._llm_usage_stats: list = []
         self._progress_callback: Optional[Callable[[int, str], None]] = None
+        self._thinking_callback: Optional[Callable[[str, str], None]] = None
 
     def set_progress_callback(self, callback: Callable[[int, str], None]):
         """Set a callback for progress updates.
@@ -54,7 +55,32 @@ class BaseAgent(ABC):
         """
         if self._progress_callback:
             self._progress_callback(min(100, max(0, progress)), message)
-    
+
+    def set_thinking_callback(self, callback: Callable[[str, str], None]):
+        """Set callback for thinking/activity logs.
+
+        Args:
+            callback: Function that takes (step_type, message)
+                      step_type: "searching", "parsing", "scoring", "filtering", "fallback", "result", "error"
+        """
+        self._thinking_callback = callback
+
+    def emit_thinking(self, step_type: str, message: str):
+        """Emit a thinking/activity step for real-time UI display.
+
+        Args:
+            step_type: Category of step
+            message: Human-readable description of what's happening
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[{self.name}] {step_type}: {message}")
+        if self._thinking_callback:
+            try:
+                self._thinking_callback(step_type, message)
+            except Exception:
+                pass
+
     @property
     def llm(self) -> Callable[..., LLMResponse]:
         """Get LLM completion function for this agent (plain, no tools)."""
