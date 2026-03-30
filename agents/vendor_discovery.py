@@ -73,7 +73,9 @@ class VendorDiscoveryAgent(BaseAgent):
 
         # Direct service provider search (no events needed)
         if not events and service_category and location:
+            self.emit_thinking("searching", f"Searching for {service_category} providers in {location}")
             vendors = self._search_service_providers_llm(service_category, location)
+            self.emit_thinking("result", f"Found {len(vendors)} service providers")
             return AgentOutput(
                 agent_name=self.name,
                 findings={"vendors": vendors, "service_category": service_category, "location": location},
@@ -87,17 +89,22 @@ class VendorDiscoveryAgent(BaseAgent):
                 metadata={"agent": self.name, "vendor_count": 0}
             )
 
+        self.emit_thinking("searching", f"Discovering vendors for {len(events)} events")
         logger.info(f"Discovering vendors for {len(events)} events")
         all_vendors = []
 
         for event in events:
+            event_name = event.get("event_name", "Unknown")
+            self.emit_thinking("searching", f"Finding sponsors and exhibitors for '{event_name}'")
             event_vendors = self._discover_for_event_llm(event)
+            self.emit_thinking("result", f"Found {len(event_vendors)} vendors for '{event_name}'")
             for v in event_vendors:
                 v['event_id'] = event.get('id')
                 v['event_name'] = event.get('event_name')
             all_vendors.extend(event_vendors)
 
         all_vendors = self._deduplicate_vendors(all_vendors)
+        self.emit_thinking("result", f"Vendor discovery complete: {len(all_vendors)} unique vendors")
         logger.info(f"Discovered {len(all_vendors)} total vendors")
 
         return AgentOutput(
@@ -164,6 +171,7 @@ class VendorDiscoveryAgent(BaseAgent):
             )
 
             if not response.success or not response.content:
+                self.emit_thinking("fallback", f"LLM vendor search failed: {response.error}")
                 logger.warning(f"LLM vendor search failed: {response.error}")
                 return []
 

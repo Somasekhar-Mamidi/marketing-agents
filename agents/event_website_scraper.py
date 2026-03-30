@@ -49,11 +49,15 @@ class EventWebsiteScraperAgent(BaseAgent):
                 metadata={"agent": self.name, "event_count": 0}
             )
 
+        self.emit_thinking("searching", f"Scraping websites for {len(events)} events")
         logger.info(f"Scraping websites for {len(events)} events")
         scraped_events = []
 
         for event in events:
             scraped_events.append(self._scrape_event(event))
+
+        successful = sum(1 for e in scraped_events if e.get("scraped_successfully", False))
+        self.emit_thinking("result", f"Scraped {successful}/{len(scraped_events)} event websites successfully")
 
         successful = sum(1 for e in scraped_events if e.get("scraped_successfully", False))
         logger.info(f"Scraped {len(scraped_events)} events, {successful} successful")

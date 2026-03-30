@@ -78,6 +78,7 @@ class EventIntelligenceAgent(BaseAgent):
         self.validate_input(input_data)
 
         events = input_data.context.get("events", [])
+        self.emit_thinking("searching", f"Analyzing {len(events)} events for strategic intelligence")
         if not events:
             return AgentOutput(
                 agent_name=self.name,
@@ -99,10 +100,16 @@ class EventIntelligenceAgent(BaseAgent):
 
     def _analyze_event(self, event: dict) -> dict:
         """Analyze event — try LLM with web search, fall back to heuristics."""
+        event_name = event.get("event_name", "Unknown")
+        self.emit_thinking("searching", f"Researching attendee data, sponsors, and competition for '{event_name}'")
         llm_analysis = self._analyze_with_llm(event)
         if llm_analysis:
+            roi = llm_analysis.get("potential_roi", "Unknown")
+            format_type = llm_analysis.get("ideal_sponsorship_format", "N/A")
+            self.emit_thinking("result", f"'{event_name}': ROI={roi}, format={format_type}")
             event.update(llm_analysis)
         else:
+            self.emit_thinking("fallback", f"LLM analysis failed for '{event_name}', using heuristic assessment")
             theme = event.get("theme", "").lower()
             audience_info = self._get_audience_info(theme)
             event["attendee_roles"] = audience_info.get("roles", "Technology professionals")

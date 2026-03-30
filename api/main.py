@@ -741,7 +741,23 @@ async def _run_vendor_pipeline(pipeline_id: str, request: PipelineStartRequest, 
 async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, run: dict):
     """Run standard event-focused pipeline."""
     import asyncio
+    import time as _time
     try:
+        # Initialize thinking log storage
+        run["agent_thinking"] = {}
+
+        def make_thinking_callback(agent_name: str):
+            """Create a thinking callback that stores steps in the run state."""
+            def callback(step_type: str, message: str):
+                if agent_name not in run["agent_thinking"]:
+                    run["agent_thinking"][agent_name] = []
+                run["agent_thinking"][agent_name].append({
+                    "step_type": step_type,
+                    "message": message,
+                    "timestamp": _time.time()
+                })
+            return callback
+
         # LLM connectivity check
         try:
             from utils.configurable_llm_client import get_llm_client
@@ -756,8 +772,9 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         # Step 1: Intent Understanding
         run["current_agent"] = "intent_understanding"
         run["progress_percent"] = 5
-        
+
         intent_agent = IntentUnderstandingAgent()
+        intent_agent.set_thinking_callback(make_thinking_callback("intent_understanding"))
         from agents.base import AgentInput
         
         intent_input = AgentInput(
@@ -805,6 +822,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         qualified_events = []
         if events:
             qualification_agent = EventQualificationAgent()
+            qualification_agent.set_thinking_callback(make_thinking_callback("event_qualification"))
             qualification_input = AgentInput(
                 query=request.query,
                 context={"events": events, "intent": intent_data}
@@ -861,6 +879,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         
         if qualified_events:
             scraper_agent = EventWebsiteScraperAgent()
+            scraper_agent.set_thinking_callback(make_thinking_callback("event_website_scraper"))
             scraper_input = AgentInput(
                 query=request.query,
                 context={"events": qualified_events}
@@ -893,6 +912,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
 
         if qualified_events:
             prioritization_agent = EventPrioritizationAgent()
+            prioritization_agent.set_thinking_callback(make_thinking_callback("event_prioritization"))
             priority_input = AgentInput(
                 query=request.query,
                 context={"events": qualified_events}
@@ -1163,22 +1183,23 @@ async def stream_pipeline_updates(pipeline_id: str):
         last_status = None
         last_progress = -1
         last_completed_agents: List[str] = []
-        
+        last_thinking_counts: Dict[str, int] = {}
+
         while True:
             run = active_runs.get(pipeline_id)
-            
+
             if not run:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Pipeline not found'})}\n\n"
                 break
-            
+
             current_status = run.get("status")
             current_progress = run.get("progress_percent", 0)
-            
+
             # Emit updates on status/progress changes
             if current_status != last_status or current_progress != last_progress:
                 last_status = current_status
                 last_progress = current_progress
-                
+
                 data = {
                     "type": "update",
                     "pipeline_id": pipeline_id,
@@ -1189,14 +1210,23 @@ async def stream_pipeline_updates(pipeline_id: str):
                     "vendors_count": run.get("vendors_count", 0),
                 }
                 yield f"data: {json.dumps(data, default=str)}\n\n"
-            
+
+            # Stream NEW thinking steps
+            agent_thinking = run.get("agent_thinking", {})
+            for agent_name, steps in agent_thinking.items():
+                sent_count = last_thinking_counts.get(agent_name, 0)
+                new_steps = steps[sent_count:]
+                for step in new_steps:
+                    yield f"data: {json.dumps({'type': 'agent_thinking', 'agent': agent_name, 'step_type': step['step_type'], 'message': step['message'], 'timestamp': step['timestamp']}, default=str)}\n\n"
+                last_thinking_counts[agent_name] = len(steps)
+
             # Detect newly completed agents and stream their outputs
             completed_agents = run.get("completed_agents", [])
             newly_completed = [a for a in completed_agents if a not in last_completed_agents]
             for agent in newly_completed:
                 yield f"data: {json.dumps({'type': 'agent_complete', 'pipeline_id': pipeline_id, 'completed_agent': agent, 'agent_output': run.get('agent_outputs', {}).get(agent, {})}, default=str)}\n\n"
             last_completed_agents = list(completed_agents)
-            
+
             # If pipeline finished, emit final aggregated outputs and exit
             if current_status in ["completed", "failed", "cancelled"]:
                 final_payload = {
@@ -1206,8 +1236,8 @@ async def stream_pipeline_updates(pipeline_id: str):
                 }
                 yield f"data: {json.dumps(final_payload, default=str)}\n\n"
                 break
-            
-            await asyncio.sleep(1)  # Poll every 1s for smoother updates
+
+            await asyncio.sleep(0.5)
     
     return StreamingResponse(
         event_generator(),

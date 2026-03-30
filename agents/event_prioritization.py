@@ -37,17 +37,19 @@ class EventPrioritizationAgent(BaseAgent):
                 metadata={"agent": self.name, "event_count": 0}
             )
         
+        self.emit_thinking("scoring", f"Prioritizing {len(events)} events by score and tier")
         logger.info(f"Prioritizing {len(events)} events")
-        
+
         # Sort events by score and tier
         prioritized_events = self._prioritize_events(events)
-        
+
         # Add recommendations
         recommended_events = []
         for event in prioritized_events:
             recommended = self._add_recommendation(event)
             recommended_events.append(recommended)
-        
+
+        self.emit_thinking("result", f"Prioritization complete. {len(recommended_events)} events ranked")
         return AgentOutput(
             agent_name=self.name,
             findings={"events": recommended_events},

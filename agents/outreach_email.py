@@ -31,16 +31,19 @@ class OutreachEmailAgent(BaseAgent):
                 metadata={"agent": self.name, "event_count": 0}
             )
         
+        vendors = input_data.context.get("vendors", [])
+        self.emit_thinking("searching", f"Generating outreach emails for {len(events)} events and {len(vendors)} vendors")
         logger.info(f"Generating outreach emails for {len(events)} events")
-        
+
         outreach_events = []
         for event in events:
             recommendation = event.get("recommendation", "")
-            
+
             if "Reach out" in recommendation or "Research further" in recommendation:
                 email_event = self._generate_outreach(event)
                 outreach_events.append(email_event)
-        
+
+        self.emit_thinking("result", f"Generated {len(outreach_events)} outreach emails")
         logger.info(f"Generated {len(outreach_events)} outreach emails")
         
         return AgentOutput(
@@ -51,14 +54,18 @@ class OutreachEmailAgent(BaseAgent):
     
     def _generate_outreach(self, event: dict) -> dict:
         """Generate outreach email for a single event."""
+        event_name = event.get("event_name", "Unknown")
+        self.emit_thinking("scoring", f"Drafting sponsorship email for '{event_name}'")
         llm_email = self._generate_with_llm(event)
         if llm_email:
+            subject = llm_email["subject"][:60]
+            self.emit_thinking("result", f"Email drafted for '{event_name}': Subject: {subject}...")
             event["outreach_subject"] = llm_email["subject"]
             event["outreach_email"] = llm_email["body"]
         else:
             event["outreach_subject"] = self._generate_subject_fallback(event)
             event["outreach_email"] = self._generate_body_fallback(event)
-        
+
         event["status"] = "Outreach Ready"
         return event
     

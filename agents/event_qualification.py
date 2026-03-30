@@ -68,11 +68,15 @@ class EventQualificationAgent(BaseAgent):
                 metadata={"agent": self.name, "event_count": 0}
             )
 
+        self.emit_thinking("scoring", f"Qualifying {len(events)} events for sponsorship potential")
         logger.info(f"Qualifying {len(events)} events")
 
         qualified_events = []
         for event in events:
             qualified_events.append(self._qualify_event(event))
+
+        if qualified_events:
+            self.emit_thinking("result", f"Qualification complete. Top event: {qualified_events[0].get('event_name', 'N/A')} (Score: {qualified_events[0].get('overall_score', 'N/A')})")
 
         qualified_events.sort(
             key=lambda x: float(x.get("overall_score") or 0),
@@ -88,8 +92,14 @@ class EventQualificationAgent(BaseAgent):
 
     def _qualify_event(self, event: dict) -> dict:
         """Qualify a single event — try LLM first, fall back to rules."""
+        event_name = event.get("event_name", "Unknown")
+        self.emit_thinking("scoring", f"Scoring '{event_name}'...")
+
         scores = self._qualify_with_llm(event)
-        if not scores:
+        if scores:
+            self.emit_thinking("result", f"LLM scored '{event_name}': audience={scores['audience_relevance_score']:.1f}, reputation={scores['industry_reputation_score']:.1f}")
+        else:
+            self.emit_thinking("fallback", f"LLM scoring failed for '{event_name}', using rule-based heuristics")
             scores = self._qualify_with_rules(event)
 
         event["audience_relevance_score"] = str(scores["audience_relevance_score"])
@@ -109,6 +119,7 @@ class EventQualificationAgent(BaseAgent):
         event["overall_score"] = str(round(overall, 1))
         event["priority_tier"] = self._determine_tier(overall)
         event["status"] = "Qualified"
+        self.emit_thinking("result", f"'{event_name}' → Score: {round(overall, 1)}, {event['priority_tier']}")
         return event
 
     def _qualify_with_llm(self, event: dict) -> Optional[dict]:
