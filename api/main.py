@@ -214,6 +214,7 @@ class PipelineStartRequest(BaseModel):
     industry: Optional[str] = None
     region: Optional[str] = None
     theme: Optional[str] = None
+    max_events: int = 50
     enable_checkpoints: bool = False
     auto_approve: bool = True
 
@@ -792,7 +793,8 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         run["current_agent"] = "event_discovery"
         run["progress_percent"] = 15
         
-        discovery_agent = EventDiscoveryAgent()
+        discovery_agent = EventDiscoveryAgent(max_events=request.max_events)
+        discovery_agent.set_thinking_callback(make_thinking_callback("event_discovery"))
         
         discovery_input = AgentInput(
             query=request.query,
@@ -837,6 +839,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         run["progress_percent"] = 50
         
         vendor_discovery_agent = VendorDiscoveryAgent(max_vendors_per_event=10)
+        vendor_discovery_agent.set_thinking_callback(make_thinking_callback("vendor_discovery"))
         
         # Check if user is looking for service providers directly
         query_lower = request.query.lower()
@@ -896,6 +899,7 @@ async def _run_event_pipeline(pipeline_id: str, request: PipelineStartRequest, r
         
         if qualified_events:
             intelligence_agent = EventIntelligenceAgent()
+            intelligence_agent.set_thinking_callback(make_thinking_callback("event_intelligence"))
             intel_input = AgentInput(
                 query=request.query,
                 context={"events": qualified_events}
